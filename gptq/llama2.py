@@ -5,7 +5,7 @@ import torch.nn as nn
 
 from gptq import *
 from quant import *
-import marlin
+import marlin_reproduction
 
 
 DEV = torch.device('cuda:0')
@@ -209,8 +209,8 @@ def llama_eval(model, dataloader, dev):
 def llama_pack(model, quantizers):
     layers = find_layers(model)
     layers = {n: layers[n] for n in quantizers}
-    marlin.replace_linear(model, lambda n: n in quantizers, groupsize=args.groupsize)
-    qlayers = find_layers(model, [marlin.Layer])
+    marlin_reproduction.replace_linear(model, lambda n: n in quantizers, groupsize=args.groupsize)
+    qlayers = find_layers(model, [marlin_reproduction.Layer])
     print('Packing ...')
     for name in qlayers:
         print(name)

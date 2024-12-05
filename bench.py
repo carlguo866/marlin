@@ -2,7 +2,7 @@ import sys
 
 import numpy as np
 import torch
-import marlin
+import marlin_reproduction
 
 import time
 
@@ -43,7 +43,7 @@ def benchmark_dense(A, B, C):
 
 def benchmark_quant(A, B, C, s, thread_k, thread_n, sms):
     workspace = torch.zeros(C.shape[1] // 128 * 16, device=torch.device('cuda:0'))
-    res = benchmark(lambda: marlin.mul(A, B, C, s, workspace, thread_k, thread_n, sms))
+    res = benchmark(lambda: marlin_reproduction.mul(A, B, C, s, workspace, thread_k, thread_n, sms))
     return {
         's': res,
         'TFLOP/s': 2 * A.numel() * C.shape[1] / res / 10 ** 12,

@@ -2,7 +2,7 @@
 # with minor modifications for Marlin checkpoint loading as I didn't find an easy way to call `lm_eval.cli_evaluate(...)` directly
 
 
-import marlin
+import marlin_reproduction
 
 # Save checkpoint name here since passing around extra args seems to confuse the eval harness
 MARLIN_CHECKPOINT = '' 
@@ -26,7 +26,7 @@ def get_llama_marlin(name, *args, **kwargs):
             return True
         return False
     groupsize = -1 if MARLIN_CHECKPOINT.endswith('marlin') else 128
-    marlin.replace_linear(model, name_filter, groupsize=groupsize)
+    marlin_reproduction.replace_linear(model, name_filter, groupsize=groupsize)
     model.load_state_dict(torch.load(MARLIN_CHECKPOINT))
     return model
 
