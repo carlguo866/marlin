@@ -96,6 +96,7 @@ class Layer(nn.Module):
 
     def forward(self, A):
         C = torch.empty(A.shape[:-1] + (self.s.shape[1],), dtype=A.dtype, device=A.device)
+        print('A.dtype', A.dtype)
         mul(A.view((-1, A.shape[-1])), self.B, C.view((-1, C.shape[-1])), self.s, self.workspace)
         return C
 
