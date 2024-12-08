@@ -277,6 +277,9 @@ __global__ void Marlin(
     }
   };
   init_slice();
+  if (threadIdx.x == 0 && blockIdx.x == 0) {
+    printf("slice_iters: %d, slice_count: %d, slice_idx: %d\n", slice_iters, slice_count, slice_idx);
+  }
 
   int a_gl_stride = prob_k / 8; // stride of the A matrix in global memory
   // We typically use `constexpr` to indicate that this value is a compile-time constant
@@ -323,10 +326,14 @@ __global__ void Marlin(
   int s_sh_rd;
 
   if (threadIdx.x < 10 && blockIdx.x == 0) {
-    printf("threadIdx.x: %d, a_gl_stride: %d, a_gl_read_delta: %d, a_gl_rd: %d\n", 
-           threadIdx.x, a_gl_stride, a_gl_rd_delta_o, a_gl_rd);
-    printf("threadIdx.x: %d, a_shared_stride: %d, a_shared_write_delta: %d, a_shared_write_index: %d\n", 
-           threadIdx.x, a_sh_stride, a_sh_wr_delta, a_sh_wr);
+    // printf("threadIdx.x: %d, a_gl_stride: %d, a_gl_read_delta: %d, a_gl_rd: %d\n", 
+    //        threadIdx.x, a_gl_stride, a_gl_rd_delta_o, a_gl_rd);
+    // printf("threadIdx.x: %d, a_shared_stride: %d, a_shared_write_delta: %d, a_shared_write_index: %d\n", 
+    //        threadIdx.x, a_sh_stride, a_sh_wr_delta, a_sh_wr);
+    printf("threadIdx.x: %d, b_global_stride: %d, b_global_read_delta: %d, b_global_rd: %d\n", 
+           threadIdx.x, b_gl_stride, b_gl_rd_delta_o, b_gl_rd);
+    printf("threadIdx.x: %d, b_shared_stride: %d, b_shared_write_delta: %d, b_shared_write_index: %d\n", 
+           threadIdx.x, b_sh_stride, b_sh_wr_delta, b_sh_wr);
   }
   // We use a different scale layout for grouped and column-wise quantization as we scale a `half2` tile in column-major
   // layout in the former and in row-major in the latter case.

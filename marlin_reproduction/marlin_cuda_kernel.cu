@@ -130,7 +130,7 @@ __device__ inline FragB dequant(int q) {
     FragB res; 
     asm volatile("sub.f16x2 %0, %1, %2;\n" : 
         "=r"((reinterpret_cast<uint32_t*>(&res))[0]) : "r"(low_val), "r"(FP16_TOP_MAGIC_NUM));
-    asm volatile("hfma.f16x2 %0, %1, %2, %3;\n" : 
+    asm volatile("fma.rn.f16x2 %0, %1, %2, %3;\n" : 
         "=r"((reinterpret_cast<uint32_t*>(&res))[1]) : "r"(high_val), "r"(ONE_SIXTEENTH), "r"(NEG_72));
     return res;
 }
@@ -191,7 +191,8 @@ __global__ void Marlin(
     return; 
   }
   
-
+  // ==== Global to shared memory fetch ====
+  // A matrix
   int a_global_stride = total_k / 8; 
   constexpr int a_global_read_delta_outer = 16 * thread_k_blocks / 8;
   int a_global_read_delta_inner = a_global_stride * (THREADS / a_global_read_delta_outer);
@@ -203,17 +204,17 @@ __global__ void Marlin(
   constexpr int a_shared_write_delta = a_shared_stride * (THREADS / a_global_read_delta_outer);
   int a_shared_write_index = a_shared_stride * (threadIdx.x / a_global_read_delta_outer) + 
               (threadIdx.x % a_global_read_delta_outer); 
-  if (threadIdx.x < 10 && blockIdx.x == 0) {
 
-    printf("threadIdx.x: %d, a_global_stride: %d, a_global_read_delta_outer: %d, a_global_read_index: %d\n", 
-           threadIdx.x, a_global_stride, a_global_read_delta_outer, a_global_read_index);
-    printf("threadIdx.x: %d, a_shared_stride: %d, a_shared_write_delta: %d, a_shared_write_index: %d\n", 
-           threadIdx.x, a_shared_stride, a_shared_write_delta, a_shared_write_index);
-  }
   constexpr int a_total_tile_size = a_shared_stride * 16 * thread_m_blocks;
   constexpr int a_shared_write_iters = ceildiv(a_total_tile_size, a_shared_write_delta);
 
+  int a_shared_write_indices[a_shared_write_iters];
+  #pragma unroll
+  for (int i = 0; i < a_shared_write_iters; i++)
+    a_shared_write_indices[i] = a_shared_write_index + a_shared_stride * i;
+  
 
+  // B matrix
   int b_global_stride = 16 * total_n / 32; 
   constexpr int b_shared_stride = 32 * thread_n_blocks / 4;
   int b_global_read_delta_outer = b_global_stride * thread_k_blocks;
@@ -228,11 +229,32 @@ __global__ void Marlin(
   b_global_read_index += b_global_read_delta_outer * cur_row;
   int b_shared_write_index = threadIdx.x; 
 
-  int a_shared_write_indices[a_shared_write_iters];
-  #pragma unroll
-  for (int i = 0; i < a_shared_write_iters; i++)
-    a_shared_write_indices[i] = a_shared_write_index + a_shared_stride * i;
-  
+  // ==== Shared memory to registers ====
+
+  // A matrix
+  constexpr int a_shared_read_delta_outer = 2 * ((THREADS / 32) / (thread_n_blocks / 4)); 
+  constexpr int a_shared_read_delta_inner = a_shared_stride * 16; 
+
+  int a_shared_read_index = a_shared_stride * (threadIdx.x / a_shared_read_delta_outer) 
+              + (threadIdx.x % a_shared_read_delta_outer);
+  a_shared_read_index += 2 * ((threadIdx.x / 32) / (thread_n_blocks / 4));
+
+  // B matrix
+  constexpr int b_shared_read_delta = THREADS;
+  int b_shared_read_index = threadIdx.x;
+
+  if (threadIdx.x < 10 && blockIdx.x == 0) {
+
+    // printf("threadIdx.x: %d, a_global_stride: %d, a_global_read_delta_outer: %d, a_global_read_index: %d\n", 
+    //        threadIdx.x, a_global_stride, a_global_read_delta_outer, a_global_read_index);
+    // printf("threadIdx.x: %d, a_shared_stride: %d, a_shared_write_delta: %d, a_shared_write_index: %d\n", 
+    //        threadIdx.x, a_shared_stride, a_shared_write_delta, a_shared_write_index);
+    printf("threadIdx.x: %d, b_global_stride: %d, b_global_read_delta_outer: %d, b_global_read_index: %d\n", 
+           threadIdx.x, b_global_stride, b_global_read_delta_outer, b_global_read_index);
+    printf("threadIdx.x: %d, b_shared_stride: %d, b_shared_write_delta: %d, b_shared_write_index: %d\n", 
+           threadIdx.x, b_shared_stride, b_shared_write_delta, b_shared_write_index);
+  }
+
 
   // Shared memory storage for global fetch pipelines. 
   extern __shared__ int4 smem[];
@@ -297,11 +319,89 @@ __global__ void Marlin(
     cp_async_fence();
   };
 
+  auto fetch_a_to_registers = [&] (int k, int pipe) {
+    int4* smem_a_cur = smem_a + pipe * a_total_tile_size;
+    #pragma unroll
+    for (int i = 0; i < thread_m_blocks; i++) {
+      ldsm4(frag_a[k % 2][i], 
+             &smem_a_cur[
+                a_shared_read_index + 
+                i * a_shared_read_delta_inner + 
+                a_shared_read_delta_outer * k
+             ]);
+    }
+  };
+  auto fetch_b_to_registers = [&] (int k, int pipe) {
+    int4* smem_b_cur = smem_b + pipe * b_total_tile_size;
+    frag_b_quant[k % 2] = *reinterpret_cast<I4*>(&smem_b_cur[
+                    b_shared_read_index + b_shared_read_delta * (k % b_shared_write_iters)
+    ]);
+  };
+  auto fetch_to_registers = [&] (int k, int pipe) {
+    fetch_a_to_registers(k, pipe);
+    fetch_b_to_registers(k, pipe);
+  };
+
+  auto matmul_stage = [&] (int k) {
+    // m dimension needs to be inner
+    #pragma unroll
+    for (int j = 0; j < 4; j++) {
+      int b_quant = frag_b_quant[k % 2][j];
+      FragB frag_b0 = dequant(b_quant);
+      FragB frag_b1 = dequant(b_quant >> 8);
+
+      #pragma unroll
+      for (int i = 0; i < thread_m_blocks; i++) {
+        mma(frag_a[k % 2][i], frag_b0, frag_c[i][j][0]);
+        mma(frag_a[k % 2][i], frag_b1, frag_c[i][j][1]);
+      }
+    }
+  };
+
+  auto threadblock_level_reduce = [&] () {
+    
+
+  };
+  
   #pragma unroll
-  for (int i = 0; i < STAGES - 1; i++)
-    fetch_to_smem_a(i, i, true);
+  for (int i = 0; i < STAGES - 1; i++){
+    fetch_to_smem(i, i, true);
+  }
+
   zero_accumulators();
   wait_for_stage();
+  fetch_a_to_registers(0, 0);
+  a_global_read_index += a_global_read_delta_outer * (STAGES - 1);
+  
+  int iters = ceildiv(num_tiles_k, THREADS);
+  while (iters) { 
+    #pragma unroll
+    for (int stage = 0; stage < STAGES; ) {
+      #pragma unroll 
+      for (int k = 0; k < b_shared_write_iters; k++) {
+        fetch_to_registers(k + 1, stage % STAGES);
+        if (k == b_shared_write_iters - 2) {
+          fetch_to_smem((stage + STAGES - 1) % STAGES, stage, true);
+          stage++;
+          wait_for_stage();
+        }
+        matmul_stage(k);
+      }
+      iters --; 
+      if (iters == 0)
+        break;
+    }
+    a_global_read_index += a_global_read_delta_outer * (STAGES); 
+  }
+
+  cp_async_wait<0>();
+  __syncthreads();
+  // if (group_blocks == -1) {
+  //   cp_async_stream(&smem_s)
+
+  
+  
+
     
   // // Print all elements of smem_a
   // if (threadIdx.x == 0 && blockIdx.x == 0) {
@@ -312,6 +412,15 @@ __global__ void Marlin(
   //   }
   // }
   // __syncthreads(); // Ensure all threads complete printing before continuing
+
+  // Print all elements of smem_b
+  // if (threadIdx.x == 0 && blockIdx.x == 0) {
+  //   printf("sizeof(int4): %d\n", sizeof(int4));
+  //   for (int i = 0; i < STAGES * b_total_tile_size; i++) {
+  //     int4 val = smem_b[i];
+  //     printf("smem_b[%d]: %d %d %d %d\n", i, val.x, val.y, val.z, val.w);
+  //   }
+  // }
 
 }
 
