@@ -321,6 +321,13 @@ __global__ void Marlin(
   int s_gl_rd = s_gl_stride * ((thread_k_blocks * slice_row) / group_blocks) + s_sh_stride * slice_col + threadIdx.x;
   int s_sh_wr = threadIdx.x;
   int s_sh_rd;
+
+  if (threadIdx.x < 10 && blockIdx.x == 0) {
+    printf("threadIdx.x: %d, a_gl_stride: %d, a_gl_read_delta: %d, a_gl_rd: %d\n", 
+           threadIdx.x, a_gl_stride, a_gl_rd_delta_o, a_gl_rd);
+    printf("threadIdx.x: %d, a_shared_stride: %d, a_shared_write_delta: %d, a_shared_write_index: %d\n", 
+           threadIdx.x, a_sh_stride, a_sh_wr_delta, a_sh_wr);
+  }
   // We use a different scale layout for grouped and column-wise quantization as we scale a `half2` tile in column-major
   // layout in the former and in row-major in the latter case.
   if (group_blocks != -1)
@@ -341,8 +348,9 @@ __global__ void Marlin(
   // the 16-byte `int4` blocks of 8 consecutive threads involve the same shared memory banks. Further, it seems (based
   // on NSight-Compute) that each warp must also write a consecutive memory segment?
   auto transform_a = [&] (int i) {
-    int row = i / a_gl_rd_delta_o;
-    return a_gl_rd_delta_o * row + (i % a_gl_rd_delta_o) ^ row;
+    return i;
+    // int row = i / a_gl_rd_delta_o;
+    // return a_gl_rd_delta_o * row + (i % a_gl_rd_delta_o) ^ row;
   };
   // Since the computation of this remapping is non-trivial and, due to our main loop unrolls, all shared memory 
   // accesses are static, we simply precompute both transformed reads and writes.
@@ -777,7 +785,7 @@ int marlin_cuda(
   int4* C_ptr = (int4*) C;
   const int4* s_ptr = (const int4*) s;
 
-  // int cols = prob_n / thread_n;
+  int cols = prob_n / thread_n;
   int* locks = (int*) workspace;
 
   int ret = 0;

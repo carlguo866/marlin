@@ -137,8 +137,8 @@ __device__ inline FragB dequant(int q) {
 
 #define BLOCK_PER_SM 4
 #define M_BLOCK_SIZE 16
-#define K_BLOCK_SIZE 16
-#define N_BLOCK_SIZE 16
+#define K_BLOCK_SIZE 8 
+#define N_BLOCK_SIZE 8
 #define THREADS 256
 #define STAGES 4
 #define SHARED_MEM 96 * 1024
@@ -193,7 +193,7 @@ __global__ void Marlin(
   
 
   int a_global_stride = total_k / 8; 
-  constexpr int a_global_read_delta_outer = 16 * thread_k_blocks / 8;
+  constexpr int a_global_read_delta_outer = K_BLOCK_SIZE * thread_k_blocks / 8;
   int a_global_read_delta_inner = a_global_stride * (THREADS / a_global_read_delta_outer);
 
   int a_global_read_index = a_global_stride * (threadIdx.x / a_global_read_delta_outer) 
@@ -204,9 +204,6 @@ __global__ void Marlin(
   int a_shared_write_index = a_shared_stride * (threadIdx.x / a_global_read_delta_outer) + 
               (threadIdx.x % a_global_read_delta_outer); 
   if (threadIdx.x < 10 && blockIdx.x == 0) {
-
-    printf("threadIdx.x: %d, a_global_stride: %d, a_global_read_delta_outer: %d, a_global_read_index: %d\n", 
-           threadIdx.x, a_global_stride, a_global_read_delta_outer, a_global_read_index);
     printf("threadIdx.x: %d, a_shared_stride: %d, a_shared_write_delta: %d, a_shared_write_index: %d\n", 
            threadIdx.x, a_shared_stride, a_shared_write_delta, a_shared_write_index);
   }
@@ -240,15 +237,15 @@ __global__ void Marlin(
   int4* smem_b = smem_a + (STAGES * a_total_tile_size);
   int4* smem_s = smem_b + (STAGES * b_total_tile_size);
 
-  // half2* smem_a_half = reinterpret_cast<half2*>(smem_a);
-  // // Zero out smem_a
-  // if (threadIdx.x < a_total_tile_size) {
-  //   #pragma unroll
-  //   for (int i = 0; i < STAGES; i++) {
-  //     smem_a_half[threadIdx.x + i * a_total_tile_size] = {0, 0};
-  //   }
-  // }
-  // __syncthreads();
+  half2* smem_a_half = reinterpret_cast<half2*>(smem_a);
+  // Zero out smem_a
+  if (threadIdx.x < a_total_tile_size) {
+    #pragma unroll
+    for (int i = 0; i < STAGES; i++) {
+      smem_a_half[threadIdx.x + i * a_total_tile_size] = {0, 0};
+    }
+  }
+  __syncthreads();
 
 
   // Registers
@@ -280,38 +277,21 @@ __global__ void Marlin(
     }
   };
   
-  auto fetch_to_smem_b = [&] (int pipe, bool pred = true) {
-    int4* smem_b_cur = smem_b + pipe * b_total_tile_size;
-    #pragma unroll
-    for (int i = 0; i < b_shared_write_iters; i++) {
-      cp_async4_stream(
-        &smem_b_cur[b_shared_write_index + b_shared_write_delta * i], 
-        &B[b_global_read_index + b_global_read_delta_inner * i]);
-    }
-  };
-
-  auto fetch_to_smem = [&] (int pipe, int a_off, bool pred = true) {
-    fetch_to_smem_a(pipe, a_off, pred);
-    fetch_to_smem_b(pipe, pred);
-    // fetch_to_smem_s(pipe, pred);
-    cp_async_fence();
-  };
-
   #pragma unroll
   for (int i = 0; i < STAGES - 1; i++)
     fetch_to_smem_a(i, i, true);
   zero_accumulators();
   wait_for_stage();
     
-  // // Print all elements of smem_a
-  // if (threadIdx.x == 0 && blockIdx.x == 0) {
-  //   for (int i = 0; i < STAGES * a_total_tile_size; i++) {
-  //     half2* smem_a_cur = reinterpret_cast<half2*>(smem_a);
-  //     printf("smem_a[%d]: %f %f\n", i, 
-  //            __half2float(smem_a_cur[i].x), __half2float(smem_a_cur[i].y));
-  //   }
-  // }
-  // __syncthreads(); // Ensure all threads complete printing before continuing
+  // Print all elements of smem_a
+  if (threadIdx.x == 0 && blockIdx.x == 0) {
+    for (int i = 0; i < STAGES * a_total_tile_size; i++) {
+      half2* smem_a_cur = reinterpret_cast<half2*>(smem_a);
+      printf("smem_a[%d]: %f %f\n", i, 
+             __half2float(smem_a_cur[i].x), __half2float(smem_a_cur[i].y));
+    }
+  }
+  __syncthreads(); // Ensure all threads complete printing before continuing
 
 }
 

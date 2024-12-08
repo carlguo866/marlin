@@ -66,10 +66,6 @@ def _get_perms():
     return perm, scale_perm, scale_perm_single
 
 _perm, _scale_perm, _scale_perm_single = _get_perms()
-print(_perm.shape)
-for i in range(32):
-    print(_perm[i * 8: (i + 1) * 8])
-
 
 class Layer(nn.Module):
     """PyTorch compatible Marlin layer; 4-bit (symmetric grouped) linear layer without bias."""
