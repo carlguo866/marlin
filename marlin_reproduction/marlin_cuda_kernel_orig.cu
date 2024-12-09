@@ -708,6 +708,17 @@ __global__ void Marlin(
           cp_async4_stream(&sh_s[s_sh_wr], &s[s_gl_rd]);
         cp_async_fence();
       }
+      if (threadIdx.x < 10 && blockIdx.x == 0) {
+        printf("s shared write idx: %d, s global read idx: %d\n", s_sh_wr, s_gl_rd);
+      } 
+
+      if (threadIdx.x == 0 && blockIdx.x == 0) {
+        for (int i = 0; i < threads * 2; i++) {
+          printf("sh_s[%d]: %f %f\n", i, 
+                  __half2float(reinterpret_cast<half2*>(sh_s)[i].x), 
+                  __half2float(reinterpret_cast<half2*>(sh_s)[i].y));
+        }
+      }
       thread_block_reduce();
       if (group_blocks == -1 && last) {
         cp_async_wait<0>();
@@ -748,23 +759,23 @@ __global__ void Marlin(
       
       
       // break;
-      // slice_row = 0;
-      // slice_col_par++;
-      // slice_col++;
-      // init_slice();
-      // if (slice_iters) {
-      //   a_gl_rd = a_gl_stride * (threadIdx.x / a_gl_rd_delta_o) + (threadIdx.x % a_gl_rd_delta_o);
-      //   #pragma unroll
-      //   for (int i = 0; i < b_sh_wr_iters; i++)
-      //     B_ptr[i] += b_sh_stride - b_gl_rd_delta_o * k_tiles;
-      //   if (slice_col == 0) {
-      //     #pragma unroll
-      //     for (int i = 0; i < b_sh_wr_iters; i++)
-      //       B_ptr[i] -= b_gl_stride;
-      //   }
-      //   s_gl_rd = s_sh_stride * slice_col + threadIdx.x;
-      //   start_pipes();
-      // }
+      slice_row = 0;
+      slice_col_par++;
+      slice_col++;
+      init_slice();
+      if (slice_iters) {
+        a_gl_rd = a_gl_stride * (threadIdx.x / a_gl_rd_delta_o) + (threadIdx.x % a_gl_rd_delta_o);
+        #pragma unroll
+        for (int i = 0; i < b_sh_wr_iters; i++)
+          B_ptr[i] += b_sh_stride - b_gl_rd_delta_o * k_tiles;
+        if (slice_col == 0) {
+          #pragma unroll
+          for (int i = 0; i < b_sh_wr_iters; i++)
+            B_ptr[i] -= b_gl_stride;
+        }
+        s_gl_rd = s_sh_stride * slice_col + threadIdx.x;
+        start_pipes();
+      }
     }
   }
 }
