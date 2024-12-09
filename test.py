@@ -14,32 +14,43 @@ torch.random.manual_seed(seed)
 DEV = torch.device('cuda:0')
 
 
-def gen_quant4(m, n, groupsize=-1):
+def gen_quant4(m, n, groupsize=-1, use_identity=False):
     tile = 16
     maxq = 2 ** 4 - 1
-    w = torch.randn((m, n), dtype=torch.half, device=DEV)
-    if groupsize != -1:
-        w = w.reshape((-1, groupsize, n))
-        w = w.permute(1, 0, 2)
-        w = w.reshape((groupsize, -1))
+    
+    if use_identity:
+        w = torch.eye(m, n, dtype=torch.half, device=DEV)
+    else:
+        w = torch.randn((m, n), dtype=torch.half, device=DEV)
+        
+    # if groupsize != -1:
+    #     w = w.reshape((-1, groupsize, n))
+    #     w = w.permute(1, 0, 2)
+        # w = w.reshape((groupsize, -1))
     s = torch.max(torch.abs(w), 0, keepdim=True)[0]
+    # print("s", s)
     s *= 2 / maxq
+    # print("s", s)   
     w = torch.round(w / s).int()
+    # print("w", w)
     w += (maxq + 1) // 2
+    # print("w", w)
     w = torch.clamp(w, 0, maxq)
+    # print("w", w)
     ref = (w - (maxq + 1) // 2).half() * s
-    if groupsize != -1:
-        def reshape(w):
-            w = w.reshape((groupsize, -1, n))
-            w = w.permute(1, 0, 2)
-            w = w.reshape((m, n)).contiguous()
-            return w
-        ref = reshape(ref)
-        w = reshape(w)
+    # if groupsize != -1:
+    #     def reshape(w):
+    #         w = w.reshape((groupsize, -1, n))
+    #         w = w.permute(1, 0, 2)
+    #         w = w.reshape((m, n)).contiguous()
+    #         return w
+    #     ref = reshape(ref)
+    #     w = reshape(w)
     s = s.reshape((-1, n)).contiguous()
     linear = nn.Linear(m, n)
     linear.weight.data = ref.t()
     # Workaround to test some special cases that are forbidden by the API
+    
     layer = marlin_reproduction.Layer(256, 256, groupsize=groupsize)
     if groupsize == -1:
         groupsize = m
@@ -58,25 +69,52 @@ class Test(unittest.TestCase):
     def run_problem(self, m, n, k, thread_k, thread_n, groupsize=-1):
         print('% 5d % 6d % 6d % 4d % 4d % 4d' % (m, n, k, thread_k, thread_n, groupsize))
         A = torch.randn((m, k), dtype=torch.half, device=DEV)
-        B_ref, B, s = gen_quant4(k, n, groupsize=groupsize)
+        B_ref, B, s = gen_quant4(k, n, groupsize=groupsize, use_identity=True)
         C = torch.zeros((m, n), dtype=torch.half, device=DEV)
         C_ref = torch.matmul(A, B_ref)
         workspace = torch.zeros(n // 128 * 16, device=DEV)
         marlin_reproduction.mul(A, B, C, s, workspace, thread_k, thread_n, -1)
         torch.cuda.synchronize()
+        print('C')
+        for row in C[:5]: 
+            print(row)
+        print('C_ref')
+        for row in C_ref[:5]: 
+            print(row)
         # print('C', C)
         self.assertLess(torch.mean(torch.abs(C - C_ref)) / torch.mean(torch.abs(C_ref)), 0.001)
 
     def run_problem_idx(self, m, n, k, thread_k, thread_n, groupsize=-1): 
         print('% 5d % 6d % 6d % 4d % 4d % 4d' % (m, n, k, thread_k, thread_n, groupsize))
-        A = torch.arange(m*k, dtype=torch.int32, device=DEV).reshape(m,k).to(torch.half)
-        print('A', A)
-        B_ref, B, s = gen_quant4(k, n, groupsize=groupsize)
+        A = torch.arange(m*k, dtype=torch.int32, device=DEV).reshape(m,k).to(torch.float32) / 100
+        A = A.half()
+        # Check for inf values in A
+        if torch.isinf(A).any():
+            print("Warning: A contains inf values")
+            print("Inf locations:", torch.nonzero(torch.isinf(A)))
+        # for row in A[-5:]: 
+        #     for elem in row:
+        #         print(f"{elem:.2f}", end=" ")
+        #     print()
+        B_ref, B, s = gen_quant4(k, n, groupsize=groupsize, use_identity=True)
+        if torch.isinf(B).any():
+            print("Warning: B contains inf values")
+            print("Inf locations:", torch.nonzero(torch.isinf(B)))
+        # print("s", s)
+        # print('B', B)
         C = torch.zeros((m, n), dtype=torch.half, device=DEV)
         C_ref = torch.matmul(A, B_ref)
         workspace = torch.zeros(n // 128 * 16, device=DEV)
         marlin_reproduction.mul(A, B, C, s, workspace, thread_k, thread_n, -1)
         torch.cuda.synchronize()
+
+        print('C')
+        for row in C[:5]: 
+            print(row)
+        print('C_ref')
+        for row in C_ref[:5]: 
+            print(row)
+        self.assertLess(torch.mean(torch.abs(C - C_ref)) / torch.mean(torch.abs(C_ref)), 0.001)
     
 
     def test_tiles(self):

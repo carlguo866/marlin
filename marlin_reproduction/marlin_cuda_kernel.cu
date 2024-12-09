@@ -112,28 +112,50 @@ __device__ inline int lop3(int a, int b, int c) {
 // We mostly follow the strategy in the link below, with some small changes:
 // https://github.com/NVIDIA/FasterTransformer/blob/main/src/fastertransformer/cutlass_extensions/include/cutlass_extensions/interleaved_numeric_conversion.h
 __device__ inline FragB dequant(int q) {
-    const int LOW_BIT_MASK = 0x000f000f;
-    const int HIGH_BIT_MASK = 0x00f000f0;
-    const int MAGIC_NUM = 0b01100100000000000110010000000000;
-    
-    const int LUT = (0xf0 & 0xcc) | 0xaa;
-    int low_val = lop3<LUT>(q, LOW_BIT_MASK, MAGIC_NUM);
-    int high_val = lop3<LUT>(q, HIGH_BIT_MASK, MAGIC_NUM);
-    
-    // This is the half2 {1032, 1032} represented as an integer.
-    const uint32_t FP16_TOP_MAGIC_NUM = 0x64086408;
-    // This is the half2 {1 / 16, 1 / 16} represented as an integer.
-    const uint32_t ONE_SIXTEENTH = 0x2c002c00;
-    // This is the half2 {-72, -72} represented as an integer.
-    const uint32_t NEG_72 = 0xd480d480;
-    
-    FragB res; 
-    asm volatile("sub.f16x2 %0, %1, %2;\n" : 
-        "=r"((reinterpret_cast<uint32_t*>(&res))[0]) : "r"(low_val), "r"(FP16_TOP_MAGIC_NUM));
-    asm volatile("fma.rn.f16x2 %0, %1, %2, %3;\n" : 
-        "=r"((reinterpret_cast<uint32_t*>(&res))[1]) : "r"(high_val), "r"(ONE_SIXTEENTH), "r"(NEG_72));
-    return res;
+  const int LO = 0x000f000f;
+  const int HI = 0x00f000f0;
+  const int EX = 0x64006400;
+  // Guarantee that the `(a & b) | c` operations are LOP3s.
+  int lo = lop3<(0xf0 & 0xcc) | 0xaa>(q, LO, EX);
+  int hi = lop3<(0xf0 & 0xcc) | 0xaa>(q, HI, EX);
+  // We want signed int4 outputs, hence we fuse the `-8` symmetric zero point directly into `SUB` and `ADD`.
+  const int SUB = 0x64086408;
+  const int MUL = 0x2c002c00;
+  const int ADD = 0xd480d480;
+  FragB frag_b;
+  frag_b[0] = __hsub2(
+    *reinterpret_cast<half2*>(&lo),
+    *reinterpret_cast<const half2*>(&SUB)
+  );
+  frag_b[1] = __hfma2(
+    *reinterpret_cast<half2*>(&hi),
+    *reinterpret_cast<const half2*>(&MUL), *reinterpret_cast<const half2*>(&ADD)
+  );
+  return frag_b;
 }
+// __device__ inline FragB dequant(int q) {
+//     const int LOW_BIT_MASK = 0x000f000f;
+//     const int HIGH_BIT_MASK = 0x00f000f0;
+//     const int MAGIC_NUM = 0b01100100000000000110010000000000;
+    
+//     const int LUT = (0xf0 & 0xcc) | 0xaa;
+//     int low_val = lop3<LUT>(q, LOW_BIT_MASK, MAGIC_NUM);
+//     int high_val = lop3<LUT>(q, HIGH_BIT_MASK, MAGIC_NUM);
+    
+//     // This is the half2 {1032, 1032} represented as an integer.
+//     const uint32_t FP16_TOP_MAGIC_NUM = 0x64086408;
+//     // This is the half2 {1 / 16, 1 / 16} represented as an integer.
+//     const uint32_t ONE_SIXTEENTH = 0x2c002c00;
+//     // This is the half2 {-72, -72} represented as an integer.
+//     const uint32_t NEG_72 = 0xd480d480;
+    
+//     FragB res; 
+//     asm volatile("sub.f16x2 %0, %1, %2;\n" : 
+//         "=r"((reinterpret_cast<uint32_t*>(&res))[0]) : "r"(low_val), "r"(FP16_TOP_MAGIC_NUM));
+//     asm volatile("fma.rn.f16x2 %0, %1, %2, %3;\n" : 
+//         "=r"((reinterpret_cast<uint32_t*>(&res))[1]) : "r"(high_val), "r"(ONE_SIXTEENTH), "r"(NEG_72));
+//     return res;
+// }
 
 #define BLOCK_PER_SM 4
 #define M_BLOCK_SIZE 16
@@ -249,10 +271,12 @@ __global__ void Marlin(
     //        threadIdx.x, a_global_stride, a_global_read_delta_outer, a_global_read_index);
     // printf("threadIdx.x: %d, a_shared_stride: %d, a_shared_write_delta: %d, a_shared_write_index: %d\n", 
     //        threadIdx.x, a_shared_stride, a_shared_write_delta, a_shared_write_index);
-    printf("threadIdx.x: %d, b_global_stride: %d, b_global_read_delta_outer: %d, b_global_read_index: %d\n", 
-           threadIdx.x, b_global_stride, b_global_read_delta_outer, b_global_read_index);
-    printf("threadIdx.x: %d, b_shared_stride: %d, b_shared_write_delta: %d, b_shared_write_index: %d\n", 
-           threadIdx.x, b_shared_stride, b_shared_write_delta, b_shared_write_index);
+    // printf("threadIdx.x: %d, b_global_stride: %d, b_global_read_delta_outer: %d, b_global_read_index: %d\n", 
+    //        threadIdx.x, b_global_stride, b_global_read_delta_outer, b_global_read_index);
+    // printf("threadIdx.x: %d, b_shared_stride: %d, b_shared_write_delta: %d, b_shared_write_index: %d\n", 
+    //        threadIdx.x, b_shared_stride, b_shared_write_delta, b_shared_write_index);
+    printf("threadIdx.x: %d, b_shared_write_iters: %d, b_shared_write_delta: %d, b_total_tile_size: %d, num_tiles_k: %d\n", 
+           threadIdx.x, b_shared_write_iters, b_shared_write_delta, b_total_tile_size, num_tiles_k);
   }
 
 
@@ -262,15 +286,15 @@ __global__ void Marlin(
   int4* smem_b = smem_a + (STAGES * a_total_tile_size);
   int4* smem_s = smem_b + (STAGES * b_total_tile_size);
 
-  // half2* smem_a_half = reinterpret_cast<half2*>(smem_a);
-  // // Zero out smem_a
-  // if (threadIdx.x < a_total_tile_size) {
-  //   #pragma unroll
-  //   for (int i = 0; i < STAGES; i++) {
-  //     smem_a_half[threadIdx.x + i * a_total_tile_size] = {0, 0};
-  //   }
-  // }
-  // __syncthreads();
+  int4* smem_b_quant = reinterpret_cast<int4*>(smem_b);
+  // Zero out smem_b
+  if (threadIdx.x < b_total_tile_size) {
+    #pragma unroll
+    for (int i = 0; i < STAGES; i++) {
+      smem_b_quant[threadIdx.x + i * b_total_tile_size] = {0, 0, 0, 0};
+    }
+  }
+  __syncthreads();
 
 
   // Registers
@@ -333,6 +357,24 @@ __global__ void Marlin(
   };
   auto fetch_b_to_registers = [&] (int k, int pipe) {
     int4* smem_b_cur = smem_b + pipe * b_total_tile_size;
+    if (threadIdx.x < 10 && blockIdx.x == 0) {
+      I4 val = *reinterpret_cast<I4*>(&smem_b_cur[
+                    b_shared_read_index + b_shared_read_delta * (k % b_shared_write_iters)
+      ]);
+      for (int i = 0; i < 4; i++) {
+          int b_quant = val[i];
+          int b_quant_shift = b_quant >> 8;
+          FragB frag_b0 = dequant(b_quant);
+          FragB frag_b1 = dequant(b_quant_shift);
+          printf("threadIdx.x: %d, b_shared_read_index: %d, b_shared_read_delta: %d, b_shared_write_iters: %d, total: %d, b_quant: %d, b_quant_shift: %d, frag_b0: %f %f %f %f, frag_b1: %f %f %f %f\n", 
+                 threadIdx.x, b_shared_read_index, b_shared_read_delta, b_shared_write_iters,
+                  b_shared_read_index + b_shared_read_delta * (k % b_shared_write_iters), b_quant, b_quant_shift,
+                  __half2float(frag_b0[0].x), __half2float(frag_b0[0].y), 
+                  __half2float(frag_b0[1].x), __half2float(frag_b0[1].y),
+                  __half2float(frag_b1[0].x), __half2float(frag_b1[0].y), 
+                  __half2float(frag_b1[1].x), __half2float(frag_b1[1].y));
+      }
+    }
     frag_b_quant[k % 2] = *reinterpret_cast<I4*>(&smem_b_cur[
                     b_shared_read_index + b_shared_read_delta * (k % b_shared_write_iters)
     ]);
@@ -349,7 +391,18 @@ __global__ void Marlin(
       int b_quant = frag_b_quant[k % 2][j];
       FragB frag_b0 = dequant(b_quant);
       FragB frag_b1 = dequant(b_quant >> 8);
-
+      if (threadIdx.x == 0 && blockIdx.x == 0) {
+        printf("frag_b0: %f %f %f %f\n", 
+               __half2float(frag_b0[0].x), 
+               __half2float(frag_b0[0].y), 
+               __half2float(frag_b0[1].x), 
+               __half2float(frag_b0[1].y));
+        printf("frag_b1: %f %f %f %f\n", 
+               __half2float(frag_b1[0].x), 
+               __half2float(frag_b1[0].y), 
+               __half2float(frag_b1[1].x), 
+               __half2float(frag_b1[1].y));
+      }
       #pragma unroll
       for (int i = 0; i < thread_m_blocks; i++) {
         mma(frag_a[k % 2][i], frag_b0, frag_c[i][j][0]);
@@ -359,21 +412,230 @@ __global__ void Marlin(
   };
 
   auto threadblock_level_reduce = [&] () {
+    // constexpr int reduction_steps = THREADS / b_shared_stride / 2;
+    // if (reduction_steps < 1) return; 
+    // const int warp_idx = threadIdx.x / b_shared_stride;
+    // const int reduction_stride = b_shared_stride * 4 * 2;
+    // const int reduction_delta = b_shared_stride;
+    // const int reduction_index = warp_idx * reduction_stride + threadIdx.x % b_shared_stride;
     
+    // for (int block_m = 0; block_m < thread_m_blocks; block_m++) {
+    //   #pragma unroll
+    //   for (int step = reduction_steps; step > 0; step /= 2) {
+    //     if (step <= warp_idx && warp_idx < 2 * step) {
+    //       #pragma unroll
+    //       for (int frag = 0; frag < 4 * 2; frag++) {
+    //         const int write_idx = reduction_delta * frag + (reduction_index - reduction_stride * step);
 
+    //         // Combine partial results if not in final step
+    //         if (step < reduction_steps) {
+    //           float* current = reinterpret_cast<float*>(&smem_s[reduction_delta * frag + reduction_index]);
+    //           float* other = reinterpret_cast<float*>(&smem_s[write_idx]);
+              
+    //           // Add values to accumulator
+    //           #pragma unroll
+    //           for (int k = 0; k < 4; k++) {
+    //             reinterpret_cast<FragC*>(frag_c)[4 * 2 * block_m + frag][k] += 
+    //               current[k] + other[k];
+    //           }
+    //         }
+
+    //         // Write combined results back to shared memory
+    //         smem_s[write_idx] = reinterpret_cast<int4*>(&frag_c)[4 * 2 * block_m + frag];
+    //       }
+    //     }
+    //     __syncthreads();
+    //   }
+    // }
+
+    // if (warp_idx == 0) {
+    //     #pragma unroll
+    //     for (int frag = 0; frag < 4 * 2; frag++) {
+    //         float* final_values = reinterpret_cast<float*>(
+    //             &smem[reduction_delta * frag + reduction_index]
+    //         );
+            
+    //         // Add final values to accumulator
+    //         #pragma unroll
+    //         for (int k = 0; k < 4; k++) {
+    //             reinterpret_cast<FragC*>(frag_c)[4 * 2 * m_block + frag][k] += 
+    //                 final_values[k];
+    //         }
+    //     }
+    // }
+    // __syncthreads();
   };
   
+  // Since we slice across the k dimension of a tile in order to increase the number of warps while keeping the n
+  // dimension of a tile reasonable, we have multiple warps that accumulate their partial sums of the same output
+  // location; which we have to reduce over in the end. We do in shared memory.
+  auto thread_block_reduce = [&] () {
+    constexpr int red_off = THREADS / b_shared_stride / 2;
+    if (red_off >= 1) {
+      int red_idx = threadIdx.x / b_shared_stride;
+      constexpr int red_sh_stride = b_shared_stride * 4 * 2;
+      constexpr int red_sh_delta = b_shared_stride; 
+      int red_sh_rd = red_sh_stride * (threadIdx.x / b_shared_stride) + (threadIdx.x % b_shared_stride);
+
+      // Parallel logarithmic shared memory reduction. We make sure to avoid any unnecessary read or write iterations,
+      // e.g., for two warps we write only once by warp 1 and read only once by warp 0. 
+
+      #pragma unroll
+      for (int m_block = 0; m_block < thread_m_blocks; m_block++) {
+        #pragma unroll
+        for (int i = red_off; i > 0; i /= 2) {
+          if (i <= red_idx && red_idx < 2 * i) {
+            #pragma unroll
+            for (int j = 0; j < 4 * 2; j++) {
+              int red_sh_wr = red_sh_delta * j + (red_sh_rd - red_sh_stride * i);
+              if (i < red_off) {
+                float* c_rd = reinterpret_cast<float*>(&smem[red_sh_delta * j + red_sh_rd]);
+                float* c_wr = reinterpret_cast<float*>(&smem[red_sh_wr]);
+                #pragma unroll
+                for (int k = 0; k < 4; k++)
+                  reinterpret_cast<FragC*>(frag_c)[4 * 2 * m_block + j][k] += c_rd[k] + c_wr[k];
+              }
+              smem[red_sh_wr] = reinterpret_cast<int4*>(&frag_c)[4 * 2 * m_block + j];
+            }
+          }
+          __syncthreads();
+        }
+        if (red_idx == 0) {
+          #pragma unroll
+          for (int i = 0; i < 4 * 2; i++) {
+            float* c_rd = reinterpret_cast<float*>(&smem[red_sh_delta * i + red_sh_rd]);
+            #pragma unroll
+            for (int j = 0; j < 4; j++)
+              reinterpret_cast<FragC*>(frag_c)[4 * 2 * m_block + i][j] += c_rd[j];
+          }
+        }
+        __syncthreads();
+      }
+    }
+  };
+
+
+
+  // Write out the reduce final result in the correct layout. We only actually reshuffle matrix fragments in this step,
+  // the reduction above is performed in fragment layout. 
+  auto write_result = [&] () {
+    int c_gl_stride = total_n / 8;
+    constexpr int c_sh_stride = 2 * thread_n_blocks + 1;
+    int c_gl_wr_delta = c_gl_stride * (THREADS / (2 * thread_n_blocks));
+    constexpr int c_sh_rd_delta = c_sh_stride * (THREADS / (2 * thread_n_blocks));
+
+    int c_gl_wr = c_gl_stride * (threadIdx.x / (2 * thread_n_blocks)) + (threadIdx.x % (2 * thread_n_blocks));
+    c_gl_wr += (2 * thread_n_blocks) * cur_col;
+    int c_sh_wr = (4 * c_sh_stride) * ((threadIdx.x % 32) / 4) + (threadIdx.x % 32) % 4;
+    c_sh_wr += 32 * (threadIdx.x / 32);
+    int c_sh_rd = c_sh_stride * (threadIdx.x / (2 * thread_n_blocks)) + (threadIdx.x % (2 * thread_n_blocks));
+
+    int c_gl_wr_end = c_gl_stride * total_m;
+
+    // We first reorder in shared memory to guarantee the most efficient final global write patterns
+    auto write = [&] (int idx, float c0, float c1, FragS& s) {
+      half2 res = __halves2half2(__float2half(c0), __float2half(c1));
+      // if (group_blocks == -1) // for per-column quantization we finally apply the scale here
+      //   res = __hmul2(res, s[0]);
+      ((half2*) smem)[idx] = res;
+    };
+    if (threadIdx.x / 32 < thread_n_blocks / 4) {
+      #pragma unroll
+      for (int i = 0; i < thread_m_blocks; i++) {
+        #pragma unroll
+        for (int j = 0; j < 4; j++) {
+          int wr = c_sh_wr + 8 * j;
+          write(wr + (4 * c_sh_stride) * 0 + 0, frag_c[i][j][0][0], frag_c[i][j][0][1], frag_s[j / 2][2 * (j % 2) + 0]);
+          write(wr + (4 * c_sh_stride) * 8 + 0, frag_c[i][j][0][2], frag_c[i][j][0][3], frag_s[j / 2][2 * (j % 2) + 0]);
+          write(wr + (4 * c_sh_stride) * 0 + 4, frag_c[i][j][1][0], frag_c[i][j][1][1], frag_s[j / 2][2 * (j % 2) + 1]);
+          write(wr + (4 * c_sh_stride) * 8 + 4, frag_c[i][j][1][2], frag_c[i][j][1][3], frag_s[j / 2][2 * (j % 2) + 1]);
+        }
+        c_sh_wr += 16 * (4 * c_sh_stride);
+      }
+    }
+    __syncthreads();
+
+    #pragma unroll
+    for (int i = 0; i < ceildiv(16 * thread_m_blocks, THREADS / (2 * thread_n_blocks)); i++) {
+      if (c_gl_wr < c_gl_wr_end) {
+        C[c_gl_wr] = smem[c_sh_rd];
+        c_gl_wr += c_gl_wr_delta;
+        c_sh_rd += c_sh_rd_delta;
+      }
+    }
+  };
+
+
   #pragma unroll
   for (int i = 0; i < STAGES - 1; i++){
     fetch_to_smem(i, i, true);
   }
 
+  // // Print all elements of smem_b
+  // if (threadIdx.x == 0 && blockIdx.x == 0) {
+  //   for (int i = 0; i < STAGES * b_total_tile_size; i++) {
+  //     I4 val = *reinterpret_cast<I4*>(&smem_b[i]); 
+  //     for (int j = 0; j < 4; j++) {
+  //       int b_quant = val[j];
+  //       FragB frag_b0 = dequant(b_quant);
+  //       FragB frag_b1 = dequant(b_quant >> 8);
+  //       for (int k = 0; k < 2; k++) {
+  //         printf("B[%d][%d][%d]: %f %f\n", i, j, k, 
+  //                 __half2float(frag_b0[k].x), 
+  //                 __half2float(frag_b0[k].y));
+  //         printf("B[%d][%d][%d]: %f %f\n", i, j, k, 
+  //                 __half2float(frag_b1[k].x), 
+  //                 __half2float(frag_b1[k].y));
+  //       }
+  //     }
+  //   }
+  // } 
+  if (threadIdx.x == 0 && blockIdx.x == 0) {
+    for (int j = 0; j < 4; j++) {
+      int b_quant = frag_b_quant[0][j];
+      FragB frag_b0 = dequant(b_quant);
+      FragB frag_b1 = dequant(b_quant >> 8);
+      for (int i = 0; i < 2; i++) {
+        printf("B0[%d]: %f %f\n", i, 
+                __half2float(frag_b0[i].x), 
+                __half2float(frag_b0[i].y));
+        printf("B1[%d]: %f %f\n", i, 
+                __half2float(frag_b1[i].x), 
+                __half2float(frag_b1[i].y));
+      }
+    }
+  }
   zero_accumulators();
   wait_for_stage();
-  fetch_a_to_registers(0, 0);
+  fetch_to_registers(0, 0);
   a_global_read_index += a_global_read_delta_outer * (STAGES - 1);
+  if (threadIdx.x == 0 && blockIdx.x == 0) {
+    for (int i = 0; i < 2 * thread_m_blocks; i++) {
+      printf("A[%d]: %f %f\n", i, 
+             __half2float(reinterpret_cast<half2*>(frag_a)[i].x), 
+             __half2float(reinterpret_cast<half2*>(frag_a)[i].y));
+    }
+    for (int j = 0; j < 4; j++) {
+      int b_quant = frag_b_quant[0][j];
+      FragB frag_b0 = dequant(b_quant);
+      FragB frag_b1 = dequant(b_quant >> 8);
+      for (int i = 0; i < 2; i++) {
+        printf("B0[%d]: %f %f\n", i, 
+                __half2float(frag_b0[i].x), 
+                __half2float(frag_b0[i].y));
+        printf("B1[%d]: %f %f\n", i, 
+                __half2float(frag_b1[i].x), 
+                __half2float(frag_b1[i].y));
+      }
+    }
+    for (int i = 0; i < thread_m_blocks * 4 * 2; i++) {
+      printf("C[%d]: %f %f\n", i, 
+              __half2float(reinterpret_cast<half2*>(C)[i].x), 
+              __half2float(reinterpret_cast<half2*>(C)[i].y));
+    }
+  }
   
-  int iters = ceildiv(num_tiles_k, THREADS);
+  int iters = 1; 
   while (iters) { 
     #pragma unroll
     for (int stage = 0; stage < STAGES; ) {
@@ -386,18 +648,46 @@ __global__ void Marlin(
           wait_for_stage();
         }
         matmul_stage(k);
+        if (threadIdx.x == 0 && blockIdx.x == 0) {
+          printf("stage: %d\n", stage);
+          
+          for (int i = 0; i < 2 * thread_m_blocks; i++) {
+            printf("A[%d]: %f %f %f %f\n", i, 
+                   __half2float(reinterpret_cast<half2*>(frag_a)[i].x), 
+                   __half2float(reinterpret_cast<half2*>(frag_a)[i].y));
+          }
+          for (int i = 0; i < thread_m_blocks * 4 * 2; i++) {
+            printf("C[%d]: %f %f\n", i, 
+                  __half2float(reinterpret_cast<half2*>(C)[i].x), 
+                  __half2float(reinterpret_cast<half2*>(C)[i].y));
+          }
+        }
+        break;
       }
-      iters --; 
+      iters--; 
       if (iters == 0)
         break;
     }
+  //   if (threadIdx.x == 0 && blockIdx.x == 0) {
+  //     for (int i = 0; i < thread_m_blocks * 4 * 2; i++) {
+  //       printf("C[%d]: %f %f\n", i, 
+  //              __half2float(reinterpret_cast<half2*>(C)[i].x), 
+  //              __half2float(reinterpret_cast<half2*>(C)[i].y));
+  //     }
+  //   }
+
     a_global_read_index += a_global_read_delta_outer * (STAGES); 
+    cp_async_wait<0>();
+    __syncthreads();
+
+    thread_block_reduce();
+    write_result(); 
+    // if (group_blocks == -1) {
+    //   cp_async_stream(&smem_s)
+
   }
 
-  cp_async_wait<0>();
-  __syncthreads();
-  // if (group_blocks == -1) {
-  //   cp_async_stream(&smem_s)
+
 
   
   

@@ -133,6 +133,7 @@ class Layer(nn.Module):
         res = res.reshape((-1, _perm.numel()))[:, _perm].reshape(res.shape)
         q = np.zeros((res.shape[0], res.shape[1] // 8), dtype=np.uint32)
         res = res.cpu().numpy().astype(np.uint32)
+        print("res", res)
         for i in range(8):
             q |= res[:, i::8] << 4 * i
         q = torch.from_numpy(q.astype(np.int32)).to(w.device)

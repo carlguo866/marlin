@@ -467,6 +467,19 @@ __global__ void Marlin(
       FragB frag_b1 = dequant(b_quant_shift);
       if (group_blocks != -1)
         scale(frag_b1, frag_s[k % 2][j], 1);
+
+      if (threadIdx.x == 0 && blockIdx.x == 0) {
+        printf("frag_b0: %f %f %f %f\n", 
+               __half2float(frag_b0[0].x), 
+               __half2float(frag_b0[0].y), 
+               __half2float(frag_b0[1].x), 
+               __half2float(frag_b0[1].y));
+        printf("frag_b1: %f %f %f %f\n", 
+               __half2float(frag_b1[0].x), 
+               __half2float(frag_b1[0].y), 
+               __half2float(frag_b1[1].x), 
+               __half2float(frag_b1[1].y));
+      }
       #pragma unroll
       for (int i = 0; i < thread_m_blocks; i++) {
         mma(frag_a[k % 2][i], frag_b0, frag_c[i][j][0]);
