@@ -77,7 +77,7 @@ class Test(unittest.TestCase):
         torch.cuda.synchronize()
         print('C')
         for row in C[:5]: 
-            print(row)
+            print(' '.join(f'{x:.2f}' for x in row / 7))
         print('C_ref')
         for row in C_ref[:5]: 
             print(row)
@@ -100,7 +100,7 @@ class Test(unittest.TestCase):
         if torch.isinf(B).any():
             print("Warning: B contains inf values")
             print("Inf locations:", torch.nonzero(torch.isinf(B)))
-        # print("s", s)
+        print("s", s)
         # print('B', B)
         C = torch.zeros((m, n), dtype=torch.half, device=DEV)
         C_ref = torch.matmul(A, B_ref)
@@ -110,7 +110,8 @@ class Test(unittest.TestCase):
 
         print('C')
         for row in C[:5]: 
-            print(row)
+            print(' '.join(f'{x:.2f}' for x in row / 7))
+            print()
         print('C_ref')
         for row in C_ref[:5]: 
             print(row)

@@ -265,19 +265,19 @@ __global__ void Marlin(
   constexpr int b_shared_read_delta = THREADS;
   int b_shared_read_index = threadIdx.x;
 
-  if (threadIdx.x < 10 && blockIdx.x == 0) {
+  // if (threadIdx.x < 10 && blockIdx.x == 0) {
 
-    // printf("threadIdx.x: %d, a_global_stride: %d, a_global_read_delta_outer: %d, a_global_read_index: %d\n", 
-    //        threadIdx.x, a_global_stride, a_global_read_delta_outer, a_global_read_index);
-    // printf("threadIdx.x: %d, a_shared_stride: %d, a_shared_write_delta: %d, a_shared_write_index: %d\n", 
-    //        threadIdx.x, a_shared_stride, a_shared_write_delta, a_shared_write_index);
-    // printf("threadIdx.x: %d, b_global_stride: %d, b_global_read_delta_outer: %d, b_global_read_index: %d\n", 
-    //        threadIdx.x, b_global_stride, b_global_read_delta_outer, b_global_read_index);
-    // printf("threadIdx.x: %d, b_shared_stride: %d, b_shared_write_delta: %d, b_shared_write_index: %d\n", 
-    //        threadIdx.x, b_shared_stride, b_shared_write_delta, b_shared_write_index);
-    printf("threadIdx.x: %d, b_shared_write_iters: %d, b_shared_write_delta: %d, b_total_tile_size: %d, num_tiles_k: %d\n", 
-           threadIdx.x, b_shared_write_iters, b_shared_write_delta, b_total_tile_size, num_tiles_k);
-  }
+  //   // printf("threadIdx.x: %d, a_global_stride: %d, a_global_read_delta_outer: %d, a_global_read_index: %d\n", 
+  //   //        threadIdx.x, a_global_stride, a_global_read_delta_outer, a_global_read_index);
+  //   // printf("threadIdx.x: %d, a_shared_stride: %d, a_shared_write_delta: %d, a_shared_write_index: %d\n", 
+  //   //        threadIdx.x, a_shared_stride, a_shared_write_delta, a_shared_write_index);
+  //   // printf("threadIdx.x: %d, b_global_stride: %d, b_global_read_delta_outer: %d, b_global_read_index: %d\n", 
+  //   //        threadIdx.x, b_global_stride, b_global_read_delta_outer, b_global_read_index);
+  //   // printf("threadIdx.x: %d, b_shared_stride: %d, b_shared_write_delta: %d, b_shared_write_index: %d\n", 
+  //   //        threadIdx.x, b_shared_stride, b_shared_write_delta, b_shared_write_index);
+  //   printf("threadIdx.x: %d, b_shared_write_iters: %d, b_shared_write_delta: %d, b_total_tile_size: %d, num_tiles_k: %d\n", 
+  //          threadIdx.x, b_shared_write_iters, b_shared_write_delta, b_total_tile_size, num_tiles_k);
+  // }
 
 
   // Shared memory storage for global fetch pipelines. 
@@ -286,15 +286,15 @@ __global__ void Marlin(
   int4* smem_b = smem_a + (STAGES * a_total_tile_size);
   int4* smem_s = smem_b + (STAGES * b_total_tile_size);
 
-  int4* smem_b_quant = reinterpret_cast<int4*>(smem_b);
-  // Zero out smem_b
-  if (threadIdx.x < b_total_tile_size) {
-    #pragma unroll
-    for (int i = 0; i < STAGES; i++) {
-      smem_b_quant[threadIdx.x + i * b_total_tile_size] = {0, 0, 0, 0};
-    }
-  }
-  __syncthreads();
+  // int4* smem_b_quant = reinterpret_cast<int4*>(smem_b);
+  // // Zero out smem_b
+  // if (threadIdx.x < b_total_tile_size) {
+  //   #pragma unroll
+  //   for (int i = 0; i < STAGES; i++) {
+  //     smem_b_quant[threadIdx.x + i * b_total_tile_size] = {0, 0, 0, 0};
+  //   }
+  // }
+  // __syncthreads();
 
 
   // Registers
@@ -357,24 +357,24 @@ __global__ void Marlin(
   };
   auto fetch_b_to_registers = [&] (int k, int pipe) {
     int4* smem_b_cur = smem_b + pipe * b_total_tile_size;
-    if (threadIdx.x < 10 && blockIdx.x == 0) {
-      I4 val = *reinterpret_cast<I4*>(&smem_b_cur[
-                    b_shared_read_index + b_shared_read_delta * (k % b_shared_write_iters)
-      ]);
-      for (int i = 0; i < 4; i++) {
-          int b_quant = val[i];
-          int b_quant_shift = b_quant >> 8;
-          FragB frag_b0 = dequant(b_quant);
-          FragB frag_b1 = dequant(b_quant_shift);
-          printf("threadIdx.x: %d, b_shared_read_index: %d, b_shared_read_delta: %d, b_shared_write_iters: %d, total: %d, b_quant: %d, b_quant_shift: %d, frag_b0: %f %f %f %f, frag_b1: %f %f %f %f\n", 
-                 threadIdx.x, b_shared_read_index, b_shared_read_delta, b_shared_write_iters,
-                  b_shared_read_index + b_shared_read_delta * (k % b_shared_write_iters), b_quant, b_quant_shift,
-                  __half2float(frag_b0[0].x), __half2float(frag_b0[0].y), 
-                  __half2float(frag_b0[1].x), __half2float(frag_b0[1].y),
-                  __half2float(frag_b1[0].x), __half2float(frag_b1[0].y), 
-                  __half2float(frag_b1[1].x), __half2float(frag_b1[1].y));
-      }
-    }
+    // if (threadIdx.x < 10 && blockIdx.x == 0) {
+    //   I4 val = *reinterpret_cast<I4*>(&smem_b_cur[
+    //                 b_shared_read_index + b_shared_read_delta * (k % b_shared_write_iters)
+    //   ]);
+    //   for (int i = 0; i < 4; i++) {
+    //       int b_quant = val[i];
+    //       int b_quant_shift = b_quant >> 8;
+    //       FragB frag_b0 = dequant(b_quant);
+    //       FragB frag_b1 = dequant(b_quant_shift);
+    //       printf("threadIdx.x: %d, b_shared_read_index: %d, b_shared_read_delta: %d, b_shared_write_iters: %d, total: %d, b_quant: %d, b_quant_shift: %d, frag_b0: %f %f %f %f, frag_b1: %f %f %f %f\n", 
+    //              threadIdx.x, b_shared_read_index, b_shared_read_delta, b_shared_write_iters,
+    //               b_shared_read_index + b_shared_read_delta * (k % b_shared_write_iters), b_quant, b_quant_shift,
+    //               __half2float(frag_b0[0].x), __half2float(frag_b0[0].y), 
+    //               __half2float(frag_b0[1].x), __half2float(frag_b0[1].y),
+    //               __half2float(frag_b1[0].x), __half2float(frag_b1[0].y), 
+    //               __half2float(frag_b1[1].x), __half2float(frag_b1[1].y));
+    //   }
+    // }
     frag_b_quant[k % 2] = *reinterpret_cast<I4*>(&smem_b_cur[
                     b_shared_read_index + b_shared_read_delta * (k % b_shared_write_iters)
     ]);
@@ -391,18 +391,18 @@ __global__ void Marlin(
       int b_quant = frag_b_quant[k % 2][j];
       FragB frag_b0 = dequant(b_quant);
       FragB frag_b1 = dequant(b_quant >> 8);
-      if (threadIdx.x == 0 && blockIdx.x == 0) {
-        printf("frag_b0: %f %f %f %f\n", 
-               __half2float(frag_b0[0].x), 
-               __half2float(frag_b0[0].y), 
-               __half2float(frag_b0[1].x), 
-               __half2float(frag_b0[1].y));
-        printf("frag_b1: %f %f %f %f\n", 
-               __half2float(frag_b1[0].x), 
-               __half2float(frag_b1[0].y), 
-               __half2float(frag_b1[1].x), 
-               __half2float(frag_b1[1].y));
-      }
+      // if (threadIdx.x == 0 && blockIdx.x == 0) {
+      //   printf("frag_b0: %f %f %f %f\n", 
+      //          __half2float(frag_b0[0].x), 
+      //          __half2float(frag_b0[0].y), 
+      //          __half2float(frag_b0[1].x), 
+      //          __half2float(frag_b0[1].y));
+      //   printf("frag_b1: %f %f %f %f\n", 
+      //          __half2float(frag_b1[0].x), 
+      //          __half2float(frag_b1[0].y), 
+      //          __half2float(frag_b1[1].x), 
+      //          __half2float(frag_b1[1].y));
+      // }
       #pragma unroll
       for (int i = 0; i < thread_m_blocks; i++) {
         mma(frag_a[k % 2][i], frag_b0, frag_c[i][j][0]);
@@ -590,50 +590,35 @@ __global__ void Marlin(
   //     }
   //   }
   // } 
-  if (threadIdx.x == 0 && blockIdx.x == 0) {
-    for (int j = 0; j < 4; j++) {
-      int b_quant = frag_b_quant[0][j];
-      FragB frag_b0 = dequant(b_quant);
-      FragB frag_b1 = dequant(b_quant >> 8);
-      for (int i = 0; i < 2; i++) {
-        printf("B0[%d]: %f %f\n", i, 
-                __half2float(frag_b0[i].x), 
-                __half2float(frag_b0[i].y));
-        printf("B1[%d]: %f %f\n", i, 
-                __half2float(frag_b1[i].x), 
-                __half2float(frag_b1[i].y));
-      }
-    }
-  }
   zero_accumulators();
   wait_for_stage();
   fetch_to_registers(0, 0);
   a_global_read_index += a_global_read_delta_outer * (STAGES - 1);
-  if (threadIdx.x == 0 && blockIdx.x == 0) {
-    for (int i = 0; i < 2 * thread_m_blocks; i++) {
-      printf("A[%d]: %f %f\n", i, 
-             __half2float(reinterpret_cast<half2*>(frag_a)[i].x), 
-             __half2float(reinterpret_cast<half2*>(frag_a)[i].y));
-    }
-    for (int j = 0; j < 4; j++) {
-      int b_quant = frag_b_quant[0][j];
-      FragB frag_b0 = dequant(b_quant);
-      FragB frag_b1 = dequant(b_quant >> 8);
-      for (int i = 0; i < 2; i++) {
-        printf("B0[%d]: %f %f\n", i, 
-                __half2float(frag_b0[i].x), 
-                __half2float(frag_b0[i].y));
-        printf("B1[%d]: %f %f\n", i, 
-                __half2float(frag_b1[i].x), 
-                __half2float(frag_b1[i].y));
-      }
-    }
-    for (int i = 0; i < thread_m_blocks * 4 * 2; i++) {
-      printf("C[%d]: %f %f\n", i, 
-              __half2float(reinterpret_cast<half2*>(C)[i].x), 
-              __half2float(reinterpret_cast<half2*>(C)[i].y));
-    }
-  }
+  // if (threadIdx.x == 0 && blockIdx.x == 0) {
+  //   for (int i = 0; i < 2 * thread_m_blocks; i++) {
+  //     printf("A[%d]: %f %f\n", i, 
+  //            __half2float(reinterpret_cast<half2*>(frag_a)[i].x), 
+  //            __half2float(reinterpret_cast<half2*>(frag_a)[i].y));
+  //   }
+  //   for (int j = 0; j < 4; j++) {
+  //     int b_quant = frag_b_quant[0][j];
+  //     FragB frag_b0 = dequant(b_quant);
+  //     FragB frag_b1 = dequant(b_quant >> 8);
+  //     for (int i = 0; i < 2; i++) {
+  //       printf("B0[%d]: %f %f\n", i, 
+  //               __half2float(frag_b0[i].x), 
+  //               __half2float(frag_b0[i].y));
+  //       printf("B1[%d]: %f %f\n", i, 
+  //               __half2float(frag_b1[i].x), 
+  //               __half2float(frag_b1[i].y));
+  //     }
+  //   }
+  //   for (int i = 0; i < thread_m_blocks * 4 * 2; i++) {
+  //     printf("C[%d]: %f %f\n", i, 
+  //             __half2float(reinterpret_cast<half2*>(C)[i].x), 
+  //             __half2float(reinterpret_cast<half2*>(C)[i].y));
+  //   }
+  // }
   
   int iters = 1; 
   while (iters) { 
@@ -648,21 +633,21 @@ __global__ void Marlin(
           wait_for_stage();
         }
         matmul_stage(k);
-        if (threadIdx.x == 0 && blockIdx.x == 0) {
-          printf("stage: %d\n", stage);
+        // if (threadIdx.x == 0 && blockIdx.x == 0) {
+        //   printf("stage: %d\n", stage);
           
-          for (int i = 0; i < 2 * thread_m_blocks; i++) {
-            printf("A[%d]: %f %f %f %f\n", i, 
-                   __half2float(reinterpret_cast<half2*>(frag_a)[i].x), 
-                   __half2float(reinterpret_cast<half2*>(frag_a)[i].y));
-          }
-          for (int i = 0; i < thread_m_blocks * 4 * 2; i++) {
-            printf("C[%d]: %f %f\n", i, 
-                  __half2float(reinterpret_cast<half2*>(C)[i].x), 
-                  __half2float(reinterpret_cast<half2*>(C)[i].y));
-          }
-        }
-        break;
+        //   for (int i = 0; i < 2 * thread_m_blocks; i++) {
+        //     printf("A[%d]: %f %f %f %f\n", i, 
+        //            __half2float(reinterpret_cast<half2*>(frag_a)[i].x), 
+        //            __half2float(reinterpret_cast<half2*>(frag_a)[i].y));
+        //   }
+        //   for (int i = 0; i < thread_m_blocks * 4 * 2; i++) {
+        //     printf("C[%d]: %f %f\n", i, 
+        //           __half2float(reinterpret_cast<half2*>(C)[i].x), 
+        //           __half2float(reinterpret_cast<half2*>(C)[i].y));
+        //   }
+        // }
+        // break;
       }
       iters--; 
       if (iters == 0)
