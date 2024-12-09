@@ -487,10 +487,10 @@ __global__ void Marlin(
   };
 
 
-  int iters = 1;
+  int iters = num_tiles_k;
   #pragma unroll
   for (int i = 0; i < STAGES - 1; i++){
-    fetch_to_smem(i, i, true);
+    fetch_to_smem(i, i, i < iters);
   }
   // Print all elements of smem_a
   // if (threadIdx.x == 0 && blockIdx.x == 0) {
