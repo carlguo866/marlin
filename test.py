@@ -109,7 +109,6 @@ class Test(unittest.TestCase):
         torch.cuda.synchronize()
 
         print('C', C.shape, C_ref.shape)
-        C = C * s
         for c_row, c_ref_row in zip(C[:100], C_ref[:100]): 
             print(' '.join(f'{x:.3f}' for x in c_row))
             print(' '.join(f'{x:.3f}' for x in c_ref_row))

@@ -433,6 +433,52 @@ __global__ void Marlin(
   };
   
 
+  auto thread_block_reduce = [&] () {
+    constexpr int red_off = THREADS / b_shared_stride / 2;
+    if (red_off >= 1) {
+      int red_idx = threadIdx.x / b_shared_stride;
+      constexpr int red_sh_stride = b_shared_stride * 4 * 2;
+      constexpr int red_sh_delta = b_shared_stride; 
+      int red_sh_rd = red_sh_stride * (threadIdx.x / b_shared_stride) + (threadIdx.x % b_shared_stride);
+
+      // Parallel logarithmic shared memory reduction. We make sure to avoid any unnecessary read or write iterations,
+      // e.g., for two warps we write only once by warp 1 and read only once by warp 0. 
+
+      #pragma unroll
+      for (int m_block = 0; m_block < thread_m_blocks; m_block++) {
+        #pragma unroll
+        for (int i = red_off; i > 0; i /= 2) {
+          if (i <= red_idx && red_idx < 2 * i) {
+            #pragma unroll
+            for (int j = 0; j < 4 * 2; j++) {
+              int red_sh_wr = red_sh_delta * j + (red_sh_rd - red_sh_stride * i);
+              if (i < red_off) {
+                float* c_rd = reinterpret_cast<float*>(&smem[red_sh_delta * j + red_sh_rd]);
+                float* c_wr = reinterpret_cast<float*>(&smem[red_sh_wr]);
+                #pragma unroll
+                for (int k = 0; k < 4; k++)
+                  reinterpret_cast<FragC*>(frag_c)[4 * 2 * m_block + j][k] += c_rd[k] + c_wr[k];
+              }
+              smem[red_sh_wr] = reinterpret_cast<int4*>(&frag_c)[4 * 2 * m_block + j];
+            }
+          }
+          __syncthreads();
+        }
+        if (red_idx == 0) {
+          #pragma unroll
+          for (int i = 0; i < 4 * 2; i++) {
+            float* c_rd = reinterpret_cast<float*>(&smem[red_sh_delta * i + red_sh_rd]);
+            #pragma unroll
+            for (int j = 0; j < 4; j++)
+              reinterpret_cast<FragC*>(frag_c)[4 * 2 * m_block + i][j] += c_rd[j];
+          }
+        }
+        __syncthreads();
+      }
+    }
+  };
+
+
   // Write out the reduce final result in the correct layout. We only actually reshuffle matrix fragments in this step,
   // the reduction above is performed in fragment layout. 
   auto write_result = [&] () {
@@ -452,8 +498,8 @@ __global__ void Marlin(
     // We first reorder in shared memory to guarantee the most efficient final global write patterns
     auto write = [&] (int idx, float c0, float c1, FragS& s) {
       half2 res = __halves2half2(__float2half(c0), __float2half(c1));
-      // if (group_blocks == -1) // for per-column quantization we finally apply the scale here
-      //   res = __hmul2(res, s[0]);
+      if (group_blocks == -1) // for per-column quantization we finally apply the scale here
+        res = __hmul2(res, s[0]);
       ((half2*) smem)[idx] = res;
     };
     if (threadIdx.x / 32 < thread_n_blocks / 4) {
@@ -538,21 +584,6 @@ __global__ void Marlin(
           wait_for_stage();
         }
         matmul_stage(k);
-        // if (threadIdx.x == 0 && blockIdx.x == 0) {
-        //   printf("stage: %d\n", stage);
-          
-        //   for (int i = 0; i < 2 * thread_m_blocks; i++) {
-        //     printf("A[%d]: %f %f %f %f\n", i, 
-        //            __half2float(reinterpret_cast<half2*>(frag_a)[i].x), 
-        //            __half2float(reinterpret_cast<half2*>(frag_a)[i].y));
-        //   }
-        //   for (int i = 0; i < thread_m_blocks * 4 * 2; i++) {
-        //     printf("C[%d]: %f %f\n", i, 
-        //           __half2float(reinterpret_cast<half2*>(C)[i].x), 
-        //           __half2float(reinterpret_cast<half2*>(C)[i].y));
-        //   }
-        // }
-        // break;
       }
       iters--; 
       if (iters == 0)
@@ -589,12 +620,21 @@ __global__ void Marlin(
     cp_async4_stream(&smem_s[s_shared_write_idx], &s[s_global_read_idx]);
     cp_async_fence();
     // threadblock_level_reduce();
+    thread_block_reduce();
 
     cp_async_wait<0>();
     __syncthreads();
     if (threadIdx.x / 32 < thread_n_blocks / 4) {
-      reinterpret_cast<int4*>(&frag_s)[0] = smem_s[s_sh_rd + 0];
-      reinterpret_cast<int4*>(&frag_s)[1] = smem_s[s_sh_rd + 4];
+      reinterpret_cast<int4*>(&frag_s)[0] = smem_s[s_shared_read_idx + 0];
+      reinterpret_cast<int4*>(&frag_s)[1] = smem_s[s_shared_read_idx + 4];
+    }
+    if (threadIdx.x == 0 && blockIdx.x == 0) {
+      for (int i = 0; i < 2 * 8; i++) {
+        half2* frag_s_cur = reinterpret_cast<half2*>(&frag_s);
+        printf("frag_s[%d]: %f %f\n", i, 
+               __half2float(frag_s_cur[i].x), 
+               __half2float(frag_s_cur[i].y));
+      }
     }
     write_result(); 
     
