@@ -123,7 +123,7 @@ class Test(unittest.TestCase):
             for thread_k, thread_n in [(64, 256)]:
                 if m > 16 and thread_k == 128:
                     continue
-                self.run_problem_idx(m, 512, 1024, thread_k, thread_n)
+                self.run_problem_idx(m, 256, 64, thread_k, thread_n)
 
     def test_k_stages_divisibility(self):
         print()

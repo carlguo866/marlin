@@ -212,6 +212,11 @@ __global__ void Marlin(
   #pragma unroll
   for (int i = 0; i < a_shared_write_iters; i++)
     a_shared_write_indices[i] = a_shared_write_idx + a_shared_stride * i;
+
+  bool a_shared_write_pred[a_shared_write_iters];
+  #pragma unroll
+  for (int i = 0; i < a_shared_write_iters; i++)
+    a_shared_write_pred[i] = a_shared_write_indices[i] < a_shared_stride*total_m;
   
 
   // B matrix
@@ -238,6 +243,8 @@ __global__ void Marlin(
   int s_shared_write_idx = threadIdx.x;
   int s_shared_read_idx = 8 * ((threadIdx.x / 32) % (thread_n_blocks / 4)) + (threadIdx.x % 32) % 4;
 
+
+  bool s_shared_write_pred = threadIdx.x < s_shared_stride;
   // ==== Shared memory to registers ====
 
   // A matrix
@@ -253,19 +260,19 @@ __global__ void Marlin(
   constexpr int b_shared_read_delta = THREADS;
   int b_shared_read_idx = threadIdx.x;
 
-  // if (threadIdx.x < 10 && blockIdx.x == 0) {
+  if (threadIdx.x < 10 && blockIdx.x == 0) {
 
-  //   // printf("threadIdx.x: %d, a_global_stride: %d, a_global_read_delta_outer: %d, a_global_read_idx: %d\n", 
-  //   //        threadIdx.x, a_global_stride, a_global_read_delta_outer, a_global_read_idx);
-  //   // printf("threadIdx.x: %d, a_shared_stride: %d, a_shared_write_delta: %d, a_shared_write_idx: %d\n", 
-  //   //        threadIdx.x, a_shared_stride, a_shared_write_delta, a_shared_write_idx);
-  //   // printf("threadIdx.x: %d, b_global_stride: %d, b_global_read_delta_outer: %d, b_global_read_idx: %d\n", 
-  //   //        threadIdx.x, b_global_stride, b_global_read_delta_outer, b_global_read_idx);
-  //   // printf("threadIdx.x: %d, b_shared_stride: %d, b_shared_write_delta: %d, b_shared_write_idx: %d\n", 
-  //   //        threadIdx.x, b_shared_stride, b_shared_write_delta, b_shared_write_idx);
-  //   printf("threadIdx.x: %d, b_shared_write_iters: %d, b_shared_write_delta: %d, b_total_tile_size: %d, num_tiles_k: %d\n", 
-  //          threadIdx.x, b_shared_write_iters, b_shared_write_delta, b_total_tile_size, num_tiles_k);
-  // }
+    // printf("threadIdx.x: %d, a_global_stride: %d, a_global_read_delta_outer: %d, a_global_read_idx: %d\n", 
+    //        threadIdx.x, a_global_stride, a_global_read_delta_outer, a_global_read_idx);
+    // printf("threadIdx.x: %d, a_shared_stride: %d, a_shared_write_delta: %d, a_shared_write_idx: %d\n", 
+    //        threadIdx.x, a_shared_stride, a_shared_write_delta, a_shared_write_idx);
+    // printf("threadIdx.x: %d, b_global_stride: %d, b_global_read_delta_outer: %d, b_global_read_idx: %d\n", 
+    //        threadIdx.x, b_global_stride, b_global_read_delta_outer, b_global_read_idx);
+    // printf("threadIdx.x: %d, b_shared_stride: %d, b_shared_write_delta: %d, b_shared_write_idx: %d\n", 
+    //        threadIdx.x, b_shared_stride, b_shared_write_delta, b_shared_write_idx);
+    printf("threadIdx.x: %d, b_shared_write_iters: %d, b_shared_write_delta: %d, b_total_tile_size: %d, num_tiles_k: %d\n", 
+           threadIdx.x, b_shared_write_iters, b_shared_write_delta, b_total_tile_size, num_tiles_k);
+  }
 
 
   // Shared memory storage for global fetch pipelines. 
@@ -297,7 +304,7 @@ __global__ void Marlin(
       reinterpret_cast<float*>(frag_c)[i] = 0;
     }
   };
-
+  int calls = 0;
   auto fetch_to_smem_a = [&] (int pipe, int a_off, bool pred = true) {
     if (pred) { 
       int4* smem_a_cur = smem_a + pipe * a_total_tile_size;
@@ -308,7 +315,7 @@ __global__ void Marlin(
           &A[a_global_read_idx + 
             a_global_read_delta_outer * a_off + 
             a_global_read_delta_inner * i],
-          true
+          a_shared_write_pred[i]
         );
       }
     }
@@ -320,8 +327,9 @@ __global__ void Marlin(
     for (int i = 0; i < b_shared_write_iters; i++) {
       cp_async4_stream(
         &smem_b_cur[b_shared_write_idx + b_shared_write_delta * i], 
-        &B[b_global_read_idx + b_global_read_delta_inner * i]);
+        &B[b_global_read_idx + b_global_read_delta_inner * i + calls*b_global_read_delta_outer]);
     }
+    calls++;
   };
 
   auto fetch_to_smem = [&] (int pipe, int a_off, bool pred = true) {
@@ -341,7 +349,7 @@ __global__ void Marlin(
              &smem_a_cur[
                 a_shared_read_idx + 
                 i * a_shared_read_delta_inner + 
-                a_shared_read_delta_outer * k
+                a_shared_read_delta_outer * (k % b_shared_write_iters)
              ]);
     }
   };
@@ -383,6 +391,7 @@ __global__ void Marlin(
     const int reduction_delta = b_shared_stride;
     const int reduction_idx = warp_idx * reduction_stride + threadIdx.x % b_shared_stride;
     
+    #pragma unroll
     for (int block_m = 0; block_m < thread_m_blocks; block_m++) {
       #pragma unroll
       for (int step = reduction_steps; step > 0; step /= 2) {
@@ -448,8 +457,7 @@ __global__ void Marlin(
     // We first reorder in shared memory to guarantee the most efficient final global write patterns
     auto write = [&] (int idx, float c0, float c1, FragS& s) {
       half2 res = __halves2half2(__float2half(c0), __float2half(c1));
-      if (group_blocks == -1) // for per-column quantization we finally apply the scale here
-        res = __hmul2(res, s[0]);
+      res = __hmul2(res, s[0]);
       ((half2*) smem)[idx] = res;
     };
     if (threadIdx.x / 32 < thread_n_blocks / 4) {
@@ -479,6 +487,7 @@ __global__ void Marlin(
   };
 
 
+  int iters = 1;
   #pragma unroll
   for (int i = 0; i < STAGES - 1; i++){
     fetch_to_smem(i, i, true);
@@ -520,7 +529,6 @@ __global__ void Marlin(
   a_global_read_idx += a_global_read_delta_outer * (STAGES - 1);
   
   // needs to edit this 
-  int iters = 1; 
   
   while (iters) { 
     #pragma unroll
@@ -529,7 +537,7 @@ __global__ void Marlin(
       for (int k = 0; k < b_shared_write_iters; k++) {
         fetch_to_registers(k + 1, stage % STAGES);
         if (k == b_shared_write_iters - 2) {
-          fetch_to_smem((stage + STAGES - 1) % STAGES, stage, true);
+          fetch_to_smem((stage + STAGES - 1) % STAGES, stage, iters >= STAGES);
           stage++;
           wait_for_stage();
         }
@@ -567,7 +575,8 @@ __global__ void Marlin(
       printf("s shared write idx: %d, s global read idx: %d\n", s_shared_write_idx, s_global_read_idx);
     } 
 
-    cp_async4_stream(&smem_s[s_shared_write_idx], &s[s_global_read_idx]);
+    if (s_shared_write_pred)
+      cp_async4_stream(&smem_s[s_shared_write_idx], &s[s_global_read_idx]);
     cp_async_fence();
     threadblock_level_reduce();
     // thread_block_reduce();
@@ -579,13 +588,14 @@ __global__ void Marlin(
       reinterpret_cast<int4*>(&frag_s)[1] = smem_s[s_shared_read_idx + 4];
     }
     if (threadIdx.x == 0 && blockIdx.x == 0) {
-      for (int i = 0; i < 2 * 8; i++) {
+      for (int i = 0; i < 8; i++) {
         half2* frag_s_cur = reinterpret_cast<half2*>(&frag_s);
         printf("frag_s[%d]: %f %f\n", i, 
                __half2float(frag_s_cur[i].x), 
                __half2float(frag_s_cur[i].y));
       }
     }
+    __syncthreads();
     write_result(); 
     
     // if (group_blocks == -1) {

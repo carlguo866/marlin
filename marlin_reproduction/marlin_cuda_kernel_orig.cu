@@ -218,6 +218,7 @@ __global__ void Marlin(
   if (prob_m > 16 * thread_m_blocks) {
     parallel = prob_m / (16 * thread_m_blocks);
     prob_m = 16 * thread_m_blocks;
+    // printf("here in the code\n");
   }
 
   int k_tiles = prob_k / 16 / thread_k_blocks;
@@ -277,9 +278,9 @@ __global__ void Marlin(
     }
   };
   init_slice();
-  if (threadIdx.x == 0 && blockIdx.x == 0) {
-    printf("slice_iters: %d, slice_count: %d, slice_idx: %d\n", slice_iters, slice_count, slice_idx);
-  }
+  // if (threadIdx.x == 0 && blockIdx.x == 0) {
+  //   printf("slice_iters: %d, slice_count: %d, slice_idx: %d\n", slice_iters, slice_count, slice_idx);
+  // }
 
   int a_gl_stride = prob_k / 8; // stride of the A matrix in global memory
   // We typically use `constexpr` to indicate that this value is a compile-time constant
@@ -339,8 +340,10 @@ __global__ void Marlin(
   // layout in the former and in row-major in the latter case.
   if (group_blocks != -1)
     s_sh_rd = 8 * ((threadIdx.x / 32) % (thread_n_blocks / 4)) + (threadIdx.x % 32) / 4;
-  else
+  else {
     s_sh_rd = 8 * ((threadIdx.x / 32) % (thread_n_blocks / 4)) + (threadIdx.x % 32) % 4;
+  }
+    
   
   // Precompute which thread should not read memory in which iterations; this is needed if there are more threads than
   // required for a certain tilesize or when the batchsize is not a multiple of 16.
@@ -708,17 +711,17 @@ __global__ void Marlin(
           cp_async4_stream(&sh_s[s_sh_wr], &s[s_gl_rd]);
         cp_async_fence();
       }
-      if (threadIdx.x < 10 && blockIdx.x == 0) {
-        printf("s shared write idx: %d, s global read idx: %d\n", s_sh_wr, s_gl_rd);
-      } 
+      // if (threadIdx.x < 10 && blockIdx.x == 0) {
+      //   printf("s shared write idx: %d, s global read idx: %d\n", s_sh_wr, s_gl_rd);
+      // } 
 
-      if (threadIdx.x == 0 && blockIdx.x == 0) {
-        for (int i = 0; i < threads * 2; i++) {
-          printf("sh_s[%d]: %f %f\n", i, 
-                  __half2float(reinterpret_cast<half2*>(sh_s)[i].x), 
-                  __half2float(reinterpret_cast<half2*>(sh_s)[i].y));
-        }
-      }
+      // if (threadIdx.x == 0 && blockIdx.x == 0) {
+      //   for (int i = 0; i < threads * 2; i++) {
+      //     printf("sh_s[%d]: %f %f\n", i, 
+      //             __half2float(reinterpret_cast<half2*>(sh_s)[i].x), 
+      //             __half2float(reinterpret_cast<half2*>(sh_s)[i].y));
+      //   }
+      // }
       thread_block_reduce();
       if (group_blocks == -1 && last) {
         cp_async_wait<0>();
@@ -728,16 +731,16 @@ __global__ void Marlin(
           reinterpret_cast<int4*>(&frag_s)[1] = sh_s[s_sh_rd + 4];
         }
       }
-      if (threadIdx.x < 10 && blockIdx.x == 0) {
-        printf("slice_count %d\n", slice_count);
-        for (int i = 0; i < thread_m_blocks * 4 * 2; i++) {
-          printf("threadIdx.x: %d, blockIdx.x: %d, C[%d]: %f %f %f %f\n", threadIdx.x, blockIdx.x, i, 
-                reinterpret_cast<FragC*>(frag_c)[i][0], 
-                reinterpret_cast<FragC*>(frag_c)[i][1], 
-                reinterpret_cast<FragC*>(frag_c)[i][2], 
-                reinterpret_cast<FragC*>(frag_c)[i][3]);
-        }
-      }
+      // if (threadIdx.x < 10 && blockIdx.x == 0) {
+      //   printf("slice_count %d\n", slice_count);
+      //   for (int i = 0; i < thread_m_blocks * 4 * 2; i++) {
+      //     printf("threadIdx.x: %d, blockIdx.x: %d, C[%d]: %f %f %f %f\n", threadIdx.x, blockIdx.x, i, 
+      //           reinterpret_cast<FragC*>(frag_c)[i][0], 
+      //           reinterpret_cast<FragC*>(frag_c)[i][1], 
+      //           reinterpret_cast<FragC*>(frag_c)[i][2], 
+      //           reinterpret_cast<FragC*>(frag_c)[i][3]);
+      //   }
+      // }
       __syncthreads();
       if (slice_count > 1) { // only globally reduce if there is more than one block in a slice
         barrier_acquire(&locks[slice_col], slice_idx);
