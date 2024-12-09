@@ -395,8 +395,7 @@ __global__ void Marlin(
             if (step < reduction_steps) {
               float* current = reinterpret_cast<float*>(&smem_s[reduction_delta * frag + reduction_idx]);
               float* other = reinterpret_cast<float*>(&smem_s[write_idx]);
-              
-              // Add values to accumulator
+            
               #pragma unroll
               for (int k = 0; k < 4; k++) {
                 reinterpret_cast<FragC*>(frag_c)[4 * 2 * block_m + frag][k] += 
@@ -405,80 +404,31 @@ __global__ void Marlin(
             }
 
             // Write combined results back to shared memory
-            smem_s[write_idx] = reinterpret_cast<int4*>(&frag_c)[4 * 2 * block_m + frag];
+            smem[write_idx] = reinterpret_cast<int4*>(&frag_c)[4 * 2 * block_m + frag];
           }
-        }
-
-
-        if (warp_idx == 0) {
-            #pragma unroll
-            for (int frag = 0; frag < 4 * 2; frag++) {
-                float* final_values = reinterpret_cast<float*>(
-                    &smem[reduction_delta * frag + reduction_idx]
-                );
-                
-                // Add final values to accumulator
-                #pragma unroll
-                for (int k = 0; k < 4; k++) {
-                    reinterpret_cast<FragC*>(frag_c)[4 * 2 * block_m + frag][k] += 
-                        final_values[k];
-                }
-            }
         }
         __syncthreads();
       }
+      if (warp_idx == 0) {
+          #pragma unroll
+          for (int frag = 0; frag < 4 * 2; frag++) {
+              float* final_values = reinterpret_cast<float*>(
+                  &smem[reduction_delta * frag + reduction_idx]
+              );
+              
+              // Add final values to accumulator
+              #pragma unroll
+              for (int k = 0; k < 4; k++) {
+                  reinterpret_cast<FragC*>(frag_c)[4 * 2 * block_m + frag][k] += 
+                      final_values[k];
+              }
+          }
+      }
+      __syncthreads();
     }
 
-    __syncthreads();
   };
   
-
-  auto thread_block_reduce = [&] () {
-    constexpr int red_off = THREADS / b_shared_stride / 2;
-    if (red_off >= 1) {
-      int red_idx = threadIdx.x / b_shared_stride;
-      constexpr int red_sh_stride = b_shared_stride * 4 * 2;
-      constexpr int red_sh_delta = b_shared_stride; 
-      int red_sh_rd = red_sh_stride * (threadIdx.x / b_shared_stride) + (threadIdx.x % b_shared_stride);
-
-      // Parallel logarithmic shared memory reduction. We make sure to avoid any unnecessary read or write iterations,
-      // e.g., for two warps we write only once by warp 1 and read only once by warp 0. 
-
-      #pragma unroll
-      for (int m_block = 0; m_block < thread_m_blocks; m_block++) {
-        #pragma unroll
-        for (int i = red_off; i > 0; i /= 2) {
-          if (i <= red_idx && red_idx < 2 * i) {
-            #pragma unroll
-            for (int j = 0; j < 4 * 2; j++) {
-              int red_sh_wr = red_sh_delta * j + (red_sh_rd - red_sh_stride * i);
-              if (i < red_off) {
-                float* c_rd = reinterpret_cast<float*>(&smem[red_sh_delta * j + red_sh_rd]);
-                float* c_wr = reinterpret_cast<float*>(&smem[red_sh_wr]);
-                #pragma unroll
-                for (int k = 0; k < 4; k++)
-                  reinterpret_cast<FragC*>(frag_c)[4 * 2 * m_block + j][k] += c_rd[k] + c_wr[k];
-              }
-              smem[red_sh_wr] = reinterpret_cast<int4*>(&frag_c)[4 * 2 * m_block + j];
-            }
-          }
-          __syncthreads();
-        }
-        if (red_idx == 0) {
-          #pragma unroll
-          for (int i = 0; i < 4 * 2; i++) {
-            float* c_rd = reinterpret_cast<float*>(&smem[red_sh_delta * i + red_sh_rd]);
-            #pragma unroll
-            for (int j = 0; j < 4; j++)
-              reinterpret_cast<FragC*>(frag_c)[4 * 2 * m_block + i][j] += c_rd[j];
-          }
-        }
-        __syncthreads();
-      }
-    }
-  };
-
-
   // Write out the reduce final result in the correct layout. We only actually reshuffle matrix fragments in this step,
   // the reduction above is performed in fragment layout. 
   auto write_result = [&] () {
@@ -619,8 +569,8 @@ __global__ void Marlin(
 
     cp_async4_stream(&smem_s[s_shared_write_idx], &s[s_global_read_idx]);
     cp_async_fence();
-    // threadblock_level_reduce();
-    thread_block_reduce();
+    threadblock_level_reduce();
+    // thread_block_reduce();
 
     cp_async_wait<0>();
     __syncthreads();
