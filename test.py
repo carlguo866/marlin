@@ -100,7 +100,7 @@ class Test(unittest.TestCase):
         if torch.isinf(B).any():
             print("Warning: B contains inf values")
             print("Inf locations:", torch.nonzero(torch.isinf(B)))
-        print("s", s)
+        # print("s", s)
         # print('B', B)
         C = torch.zeros((m, n), dtype=torch.half, device=DEV)
         C_ref = torch.matmul(A, B_ref)
@@ -108,13 +108,12 @@ class Test(unittest.TestCase):
         marlin_reproduction.mul(A, B, C, s, workspace, thread_k, thread_n, -1)
         torch.cuda.synchronize()
 
-        print('C')
-        for row in C[:5]: 
-            print(' '.join(f'{x:.2f}' for x in row / 7))
+        print('C', C.shape, C_ref.shape)
+        C = C * s
+        for c_row, c_ref_row in zip(C[:100], C_ref[:100]): 
+            print(' '.join(f'{x:.3f}' for x in c_row))
+            print(' '.join(f'{x:.3f}' for x in c_ref_row))
             print()
-        print('C_ref')
-        for row in C_ref[:5]: 
-            print(row)
         self.assertLess(torch.mean(torch.abs(C - C_ref)) / torch.mean(torch.abs(C_ref)), 0.001)
     
 

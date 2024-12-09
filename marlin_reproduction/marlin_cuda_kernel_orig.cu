@@ -325,16 +325,16 @@ __global__ void Marlin(
   int s_sh_wr = threadIdx.x;
   int s_sh_rd;
 
-  if (threadIdx.x < 10 && blockIdx.x == 0) {
-    // printf("threadIdx.x: %d, a_gl_stride: %d, a_gl_read_delta: %d, a_gl_rd: %d\n", 
-    //        threadIdx.x, a_gl_stride, a_gl_rd_delta_o, a_gl_rd);
-    // printf("threadIdx.x: %d, a_shared_stride: %d, a_shared_write_delta: %d, a_shared_write_index: %d\n", 
-    //        threadIdx.x, a_sh_stride, a_sh_wr_delta, a_sh_wr);
-    printf("threadIdx.x: %d, b_global_stride: %d, b_global_read_delta: %d, b_global_rd: %d\n", 
-           threadIdx.x, b_gl_stride, b_gl_rd_delta_o, b_gl_rd);
-    printf("threadIdx.x: %d, b_shared_stride: %d, b_shared_write_delta: %d, b_shared_write_index: %d\n", 
-           threadIdx.x, b_sh_stride, b_sh_wr_delta, b_sh_wr);
-  }
+  // if (threadIdx.x < 10 && blockIdx.x == 0) {
+  //   // printf("threadIdx.x: %d, a_gl_stride: %d, a_gl_read_delta: %d, a_gl_rd: %d\n", 
+  //   //        threadIdx.x, a_gl_stride, a_gl_rd_delta_o, a_gl_rd);
+  //   // printf("threadIdx.x: %d, a_shared_stride: %d, a_shared_write_delta: %d, a_shared_write_index: %d\n", 
+  //   //        threadIdx.x, a_sh_stride, a_sh_wr_delta, a_sh_wr);
+  //   printf("threadIdx.x: %d, b_global_stride: %d, b_global_read_delta: %d, b_global_rd: %d\n", 
+  //          threadIdx.x, b_gl_stride, b_gl_rd_delta_o, b_gl_rd);
+  //   printf("threadIdx.x: %d, b_shared_stride: %d, b_shared_write_delta: %d, b_shared_write_index: %d\n", 
+  //          threadIdx.x, b_sh_stride, b_sh_wr_delta, b_sh_wr);
+  // }
   // We use a different scale layout for grouped and column-wise quantization as we scale a `half2` tile in column-major
   // layout in the former and in row-major in the latter case.
   if (group_blocks != -1)
@@ -467,19 +467,6 @@ __global__ void Marlin(
       FragB frag_b1 = dequant(b_quant_shift);
       if (group_blocks != -1)
         scale(frag_b1, frag_s[k % 2][j], 1);
-
-      if (threadIdx.x == 0 && blockIdx.x == 0) {
-        printf("frag_b0: %f %f %f %f\n", 
-               __half2float(frag_b0[0].x), 
-               __half2float(frag_b0[0].y), 
-               __half2float(frag_b0[1].x), 
-               __half2float(frag_b0[1].y));
-        printf("frag_b1: %f %f %f %f\n", 
-               __half2float(frag_b1[0].x), 
-               __half2float(frag_b1[0].y), 
-               __half2float(frag_b1[1].x), 
-               __half2float(frag_b1[1].y));
-      }
       #pragma unroll
       for (int i = 0; i < thread_m_blocks; i++) {
         mma(frag_a[k % 2][i], frag_b0, frag_c[i][j][0]);
@@ -657,6 +644,36 @@ __global__ void Marlin(
   };
   start_pipes();
 
+  // if (threadIdx.x == 0 && blockIdx.x == 0) {
+  //   for (int i = 0; i < stages * a_sh_stage; i++) {
+  //     half2* smem_a_cur = reinterpret_cast<half2*>(sh_a);
+  //     printf("smem_a[%d]: %f %f\n", i, 
+  //            __half2float(smem_a_cur[i].x), __half2float(smem_a_cur[i].y));
+  //   }
+  // }
+  // __syncthreads(); // Ensure all threads complete printing before continuing
+
+  // if (threadIdx.x == 0 && blockIdx.x == 0) {
+  //   for (int i = 0; i < stages * b_sh_stage; i++) {
+  //     I4 val = *reinterpret_cast<I4*>(&sh_b[i]); 
+  //     for (int j = 0; j < 4; j++) {
+  //       int b_quant = val[j];
+  //       FragB frag_b0 = dequant(b_quant);
+  //       FragB frag_b1 = dequant(b_quant >> 8);
+  //       for (int k = 0; k < 2; k++) {
+  //         printf("B[%d][%d][%d]: %f %f %f %f", i, j, k, 
+  //                 __half2float(frag_b0[k].x), 
+  //                 __half2float(frag_b0[k].y),
+  //                 __half2float(frag_b1[k].x), 
+  //                 __half2float(frag_b1[k].y));
+  //       }
+  //       printf("\n");
+  //     }
+  //   }
+  // } 
+  // __syncthreads();
+  
+
   // Main loop.
   while (slice_iters) {
     // We unroll over both the global fetch and the register load pipeline to ensure all shared memory accesses are
@@ -684,6 +701,7 @@ __global__ void Marlin(
     if (slice_iters == 0) {
       cp_async_wait<0>();
       bool last = slice_idx == slice_count - 1;
+      // bool last = true;
       // For per-column scales, we only fetch them here in the final step before write-out
       if (group_blocks == -1 && last) {
         if (s_sh_wr_pred)
@@ -699,30 +717,54 @@ __global__ void Marlin(
           reinterpret_cast<int4*>(&frag_s)[1] = sh_s[s_sh_rd + 4];
         }
       }
+      if (threadIdx.x < 10 && blockIdx.x == 0) {
+        printf("slice_count %d\n", slice_count);
+        for (int i = 0; i < thread_m_blocks * 4 * 2; i++) {
+          printf("threadIdx.x: %d, blockIdx.x: %d, C[%d]: %f %f %f %f\n", threadIdx.x, blockIdx.x, i, 
+                reinterpret_cast<FragC*>(frag_c)[i][0], 
+                reinterpret_cast<FragC*>(frag_c)[i][1], 
+                reinterpret_cast<FragC*>(frag_c)[i][2], 
+                reinterpret_cast<FragC*>(frag_c)[i][3]);
+        }
+      }
+      __syncthreads();
       if (slice_count > 1) { // only globally reduce if there is more than one block in a slice
         barrier_acquire(&locks[slice_col], slice_idx);
         global_reduce(slice_idx == 0, last);
         barrier_release(&locks[slice_col], last);
       }
+      // print shmem 
+      // if (threadIdx.x == 0 && blockIdx.x == 0) {
+      //   for (int i = 0; i < threads * 10; i++) {
+      //     FragA val = reinterpret_cast<FragA*>(sh)[i];
+      //     for (int j = 0; j < 4; j++) {
+      //       half2 val2 = val[j];
+      //       printf("sh[%d][%d]: %f %f\n", i, j, __half2float(val2.x), __half2float(val2.y));
+      //     }
+      //   }
+      // }
       if (last) // only the last block in a slice actually writes the result
         write_result();
-      slice_row = 0;
-      slice_col_par++;
-      slice_col++;
-      init_slice();
-      if (slice_iters) {
-        a_gl_rd = a_gl_stride * (threadIdx.x / a_gl_rd_delta_o) + (threadIdx.x % a_gl_rd_delta_o);
-        #pragma unroll
-        for (int i = 0; i < b_sh_wr_iters; i++)
-          B_ptr[i] += b_sh_stride - b_gl_rd_delta_o * k_tiles;
-        if (slice_col == 0) {
-          #pragma unroll
-          for (int i = 0; i < b_sh_wr_iters; i++)
-            B_ptr[i] -= b_gl_stride;
-        }
-        s_gl_rd = s_sh_stride * slice_col + threadIdx.x;
-        start_pipes();
-      }
+      
+      
+      // break;
+      // slice_row = 0;
+      // slice_col_par++;
+      // slice_col++;
+      // init_slice();
+      // if (slice_iters) {
+      //   a_gl_rd = a_gl_stride * (threadIdx.x / a_gl_rd_delta_o) + (threadIdx.x % a_gl_rd_delta_o);
+      //   #pragma unroll
+      //   for (int i = 0; i < b_sh_wr_iters; i++)
+      //     B_ptr[i] += b_sh_stride - b_gl_rd_delta_o * k_tiles;
+      //   if (slice_col == 0) {
+      //     #pragma unroll
+      //     for (int i = 0; i < b_sh_wr_iters; i++)
+      //       B_ptr[i] -= b_gl_stride;
+      //   }
+      //   s_gl_rd = s_sh_stride * slice_col + threadIdx.x;
+      //   start_pipes();
+      // }
     }
   }
 }

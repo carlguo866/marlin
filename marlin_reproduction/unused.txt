@@ -1,0 +1,56 @@
+
+  auto threadblock_level_reduce = [&] () {
+    // constexpr int reduction_steps = THREADS / b_shared_stride / 2;
+    // if (reduction_steps < 1) return; 
+    // const int warp_idx = threadIdx.x / b_shared_stride;
+    // const int reduction_stride = b_shared_stride * 4 * 2;
+    // const int reduction_delta = b_shared_stride;
+    // const int reduction_index = warp_idx * reduction_stride + threadIdx.x % b_shared_stride;
+    
+    // for (int block_m = 0; block_m < thread_m_blocks; block_m++) {
+    //   #pragma unroll
+    //   for (int step = reduction_steps; step > 0; step /= 2) {
+    //     if (step <= warp_idx && warp_idx < 2 * step) {
+    //       #pragma unroll
+    //       for (int frag = 0; frag < 4 * 2; frag++) {
+    //         const int write_idx = reduction_delta * frag + (reduction_index - reduction_stride * step);
+
+    //         // Combine partial results if not in final step
+    //         if (step < reduction_steps) {
+    //           float* current = reinterpret_cast<float*>(&smem_s[reduction_delta * frag + reduction_index]);
+    //           float* other = reinterpret_cast<float*>(&smem_s[write_idx]);
+              
+    //           // Add values to accumulator
+    //           #pragma unroll
+    //           for (int k = 0; k < 4; k++) {
+    //             reinterpret_cast<FragC*>(frag_c)[4 * 2 * block_m + frag][k] += 
+    //               current[k] + other[k];
+    //           }
+    //         }
+
+    //         // Write combined results back to shared memory
+    //         smem_s[write_idx] = reinterpret_cast<int4*>(&frag_c)[4 * 2 * block_m + frag];
+    //       }
+    //     }
+    //     __syncthreads();
+    //   }
+    // }
+
+    // if (warp_idx == 0) {
+    //     #pragma unroll
+    //     for (int frag = 0; frag < 4 * 2; frag++) {
+    //         float* final_values = reinterpret_cast<float*>(
+    //             &smem[reduction_delta * frag + reduction_index]
+    //         );
+            
+    //         // Add final values to accumulator
+    //         #pragma unroll
+    //         for (int k = 0; k < 4; k++) {
+    //             reinterpret_cast<FragC*>(frag_c)[4 * 2 * m_block + frag][k] += 
+    //                 final_values[k];
+    //         }
+    //     }
+    // }
+    // __syncthreads();
+  };
+  
