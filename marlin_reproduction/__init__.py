@@ -66,9 +66,9 @@ def _get_perms():
     return perm, scale_perm, scale_perm_single
 
 _perm, _scale_perm, _scale_perm_single = _get_perms()
-print("scale_perm", _scale_perm)
-print("scale_perm_single", _scale_perm_single)
-print("perm", _perm)
+# print("scale_perm", _scale_perm)
+# print("scale_perm_single", _scale_perm_single)
+# print("perm", _perm)
 # _scale_perm = list(range(len(_scale_perm)))
 # _perm = torch.tensor(list(range(len(_perm))))
 # _scale_perm_single = list(range(len(_scale_perm_single)))
@@ -119,22 +119,21 @@ class Layer(nn.Module):
         maxq = 2 ** 4 - 1
         s = scales.t()
         w = linear.weight.data.t()
-        # if self.groupsize != self.k:
-        #     w = w.reshape((-1, self.groupsize, self.n))
-        #     w = w.permute(1, 0, 2)
-        #     w = w.reshape((self.groupsize, -1))
-        #     s = s.reshape((1, -1))
+        if self.groupsize != self.k:
+            w = w.reshape((-1, self.groupsize, self.n))
+            w = w.permute(1, 0, 2)
+            w = w.reshape((self.groupsize, -1))
+            s = s.reshape((1, -1))
         w = torch.round(w / s).int()
         w += (maxq + 1) // 2
         w = torch.clamp(w, 0, maxq)
-        # if self.groupsize != self.k:
-        #     w = w.reshape((self.groupsize, -1, self.n))
-        #     w = w.permute(1, 0, 2)
-        #     w = w.reshape((self.k, self.n)).contiguous()
-        #     s = s.reshape((-1, len(_scale_perm)))[:, _scale_perm]
-        # else:
-        # s = s.reshape((-1, len(_scale_perm_single)))[:, _scale_perm_single]
-        s = s.reshape((-1, len(_scale_perm_single)))[:, _scale_perm_single]
+        if self.groupsize != self.k:
+            w = w.reshape((self.groupsize, -1, self.n))
+            w = w.permute(1, 0, 2)
+            w = w.reshape((self.k, self.n)).contiguous()
+            s = s.reshape((-1, len(_scale_perm)))[:, _scale_perm]
+        else:
+            s = s.reshape((-1, len(_scale_perm_single)))[:, _scale_perm_single]
         
         s = s.reshape((-1, self.n)).contiguous()
         w = w.reshape((self.k // tile, tile, self.n // tile, tile))
@@ -144,7 +143,7 @@ class Layer(nn.Module):
         res = res.reshape((-1, _perm.numel()))[:, _perm].reshape(res.shape)
         q = np.zeros((res.shape[0], res.shape[1] // 8), dtype=np.uint32)
         res = res.cpu().numpy().astype(np.uint32)
-        print("res", res)
+        # print("res", res)
         for i in range(8):
             q |= res[:, i::8] << 4 * i
         q = torch.from_numpy(q.astype(np.int32)).to(w.device)
