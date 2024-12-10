@@ -441,6 +441,7 @@ __global__ void Marlin(
   // Write out the reduce final result in the correct layout. We only actually reshuffle matrix fragments in this step,
   // the reduction above is performed in fragment layout. 
   auto write_result = [&] () {
+    if (blockIdx.x != 1) return;
     int c_gl_stride = total_n / 8;
     constexpr int c_sh_stride = 2 * thread_n_blocks + 1;
     int c_gl_wr_delta = c_gl_stride * (THREADS / (2 * thread_n_blocks));
@@ -487,7 +488,8 @@ __global__ void Marlin(
   };
 
 
-  int iters = num_tiles_k;
+  // int iters = num_tiles_k;
+  int iters = 1;
   #pragma unroll
   for (int i = 0; i < STAGES - 1; i++){
     fetch_to_smem(i, i, i < iters);

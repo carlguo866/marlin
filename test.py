@@ -33,9 +33,9 @@ def gen_quant4(m, n, groupsize=-1, matrix_type="random"):
     #     w = w.reshape((-1, groupsize, n))
     #     w = w.permute(1, 0, 2)
         # w = w.reshape((groupsize, -1))
-    print("orig w")
-    for row in w[:5]:
-        print(' '.join(f'{x:.2f}' for x in row))
+    # print("orig w")
+    # for row in w[:5]:
+    #     print(' '.join(f'{x:.2f}' for x in row))
     s = torch.max(torch.abs(w), 0, keepdim=True)[0]
     # print("s", s)
     s *= 2 / maxq
@@ -47,12 +47,12 @@ def gen_quant4(m, n, groupsize=-1, matrix_type="random"):
     w = torch.clamp(w, 0, maxq)
     # print("w", w)
     ref = (w - (maxq + 1) // 2).half() * s
-    print("ref", ref.shape)
-    for row in ref[:5]:
-        print(' '.join(f'{x:.2f}' for x in row))
-    print("w", w.shape)
-    for row in w[:5]:
-        print(' '.join(f'{x:.2f}' for x in row))
+    # print("ref", ref.shape)
+    # for row in ref[:5]:
+    #     print(' '.join(f'{x:.2f}' for x in row))
+    # print("w", w.shape)
+    # for row in w[:5]:
+    #     print(' '.join(f'{x:.2f}' for x in row))
 
     # if groupsize != -1:
     #     def reshape(w):
@@ -152,10 +152,19 @@ class Test(unittest.TestCase):
         torch.cuda.synchronize()
 
         print('C', C.shape, C_ref.shape)
-        for c_row, c_ref_row in zip(C[:100], C_ref[:100]): 
-            print(' '.join(f'{x:.3f}' for x in c_row))
-            print(' '.join(f'{x:.3f}' for x in c_ref_row))
-            print()
+        # Check if C is all zeros
+        if torch.all(C == 0):
+            print("Warning: C contains all zeros!")
+        elif torch.any(C == 0):
+            print("Warning: C contains some non-zero values")
+            print("Number of non-zero values:", torch.sum(C != 0).item())
+        for idx, (c_row, c_ref_row) in enumerate(zip(C[:100], C_ref[:100])): 
+            # print index
+            print(idx)
+            print(' '.join(f'{i:>7d}' for i in range(len(c_row))))
+            print(' '.join(f'{x:>7.3f}' for x in c_row))
+            print(' '.join(f'{x:>7.3f}' for x in c_ref_row))
+            # print()
         self.assertLess(torch.mean(torch.abs(C - C_ref)) / torch.mean(torch.abs(C_ref)), 0.001)
     
 

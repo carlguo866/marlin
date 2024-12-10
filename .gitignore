@@ -8,3 +8,4 @@ _backup
 gptq/__pycache__
 gptq/*.marlin.g128
 __pycache__
+*.log
