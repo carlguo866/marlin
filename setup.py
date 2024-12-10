@@ -11,7 +11,8 @@ setup(
     packages=['marlin_reproduction'],
     ext_modules=[cpp_extension.CUDAExtension(
         # 'marlin_cuda', ['marlin_reproduction/marlin_cuda.cpp', 'marlin_reproduction/marlin_cuda_kernel_orig.cu']
-        'marlin_cuda', ['marlin_reproduction/marlin_cuda.cpp', 'marlin_reproduction/marlin_cuda_kernel.cu']
+        # 'marlin_cuda', ['marlin_reproduction/marlin_cuda.cpp', 'marlin_reproduction/marlin_cuda_kernel.cu']
+        'marlin_cuda', ['marlin_reproduction/marlin_cuda.cpp', 'marlin_reproduction/marlin_hadamard.cu']
     )],
     cmdclass={'build_ext': cpp_extension.BuildExtension},
 )

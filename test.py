@@ -3,7 +3,7 @@ import unittest
 import numpy as np
 import torch
 import torch.nn as nn
-
+from scipy.linalg import hadamard as scipy_hadamard
 import marlin_reproduction
 
 
@@ -13,6 +13,12 @@ torch.random.manual_seed(seed)
 
 DEV = torch.device('cuda:0')
 
+
+def segment_wise_hadamard(A):
+    L = 256
+    H = torch.as_tensor(scipy_hadamard(L)).to(torch.float16).to(DEV)
+    H = torch.block_diag(*[H] * (A.shape[1] // L))
+    return A @ H
 
 def gen_quant4(m, n, groupsize=-1, matrix_type="random"):
     tile = 16
@@ -102,8 +108,9 @@ class Test(unittest.TestCase):
 
     def run_problem_idx(self, m, n, k, thread_k, thread_n, groupsize=-1): 
         print('% 5d % 6d % 6d % 4d % 4d % 4d' % (m, n, k, thread_k, thread_n, groupsize))
-        A = torch.arange(m*k, dtype=torch.int32, device=DEV).reshape(m,k).to(torch.float32) / 100
-        A = A.half()
+        # A = torch.arange(m*k, dtype=torch.int32, device=DEV).reshape(m,k).to(torch.float32) / 100
+        # A = A.half()
+        A = torch.randn((m, k), dtype=torch.half, device=DEV)
         
         # Check for inf values in A
         if torch.isinf(A).any():
@@ -121,7 +128,9 @@ class Test(unittest.TestCase):
         # print("s", s)
         # print('B', B)
         C = torch.zeros((m, n), dtype=torch.half, device=DEV)
-        C_ref = torch.matmul(A, B_ref)
+        A_h = segment_wise_hadamard(A)
+        C_ref = torch.matmul(A_h, B_ref)
+        # C_ref = torch.matmul(A, B_ref)
         workspace = torch.zeros(n // 128 * 16, device=DEV)
         print(B.shape, B.dtype)
         # Print stride between consecutive values in B
@@ -171,10 +180,12 @@ class Test(unittest.TestCase):
     def test_tiles(self):
         print()
         # for m in [1, 2, 3, 4, 8, 12, 16, 24, 32, 48, 64, 118, 128, 152, 768, 1024]:
+        # for m in [8, 16, 32, 64, 128, 256]:
         for m in [128]:
-            for thread_k, thread_n in [(64, 256)]:
-                if m > 16 and thread_k == 128:
-                    continue
+            print("====== ", m, " ======")
+            for thread_k, thread_n in [(256, 64)]:
+                # if m > 16 and thread_k == 128:
+                #     continue
                 self.run_problem_idx(m, 512, 1024, thread_k, thread_n)
                 # self.run_problem_idx(m, 32, 64, thread_k, thread_n)
 
