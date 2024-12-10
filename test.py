@@ -14,19 +14,28 @@ torch.random.manual_seed(seed)
 DEV = torch.device('cuda:0')
 
 
-def gen_quant4(m, n, groupsize=-1, use_identity=False):
+def gen_quant4(m, n, groupsize=-1, matrix_type="random"):
     tile = 16
     maxq = 2 ** 4 - 1
     
-    if use_identity:
+    if matrix_type == "index":
+        w = (torch.arange(m * n, dtype=torch.int32, device=DEV).reshape(m, n).to(torch.float32) / 100).half()
+    elif matrix_type == "identity":
         w = torch.eye(m, n, dtype=torch.half, device=DEV)
-    else:
+    elif matrix_type == "random":
         w = torch.randn((m, n), dtype=torch.half, device=DEV)
+    elif matrix_type == "row": 
+        w = torch.zeros((m, n), dtype=torch.half, device=DEV)
+        for i in range(m):
+            w[i,:] = float(i) * 2 / 100
         
     # if groupsize != -1:
     #     w = w.reshape((-1, groupsize, n))
     #     w = w.permute(1, 0, 2)
         # w = w.reshape((groupsize, -1))
+    print("orig w")
+    for row in w[:5]:
+        print(' '.join(f'{x:.2f}' for x in row))
     s = torch.max(torch.abs(w), 0, keepdim=True)[0]
     # print("s", s)
     s *= 2 / maxq
@@ -38,6 +47,13 @@ def gen_quant4(m, n, groupsize=-1, use_identity=False):
     w = torch.clamp(w, 0, maxq)
     # print("w", w)
     ref = (w - (maxq + 1) // 2).half() * s
+    print("ref", ref.shape)
+    for row in ref[:5]:
+        print(' '.join(f'{x:.2f}' for x in row))
+    print("w", w.shape)
+    for row in w[:5]:
+        print(' '.join(f'{x:.2f}' for x in row))
+
     # if groupsize != -1:
     #     def reshape(w):
     #         w = w.reshape((groupsize, -1, n))
@@ -50,7 +66,6 @@ def gen_quant4(m, n, groupsize=-1, use_identity=False):
     linear = nn.Linear(m, n)
     linear.weight.data = ref.t()
     # Workaround to test some special cases that are forbidden by the API
-    
     layer = marlin_reproduction.Layer(256, 256, groupsize=groupsize)
     if groupsize == -1:
         groupsize = m
@@ -62,32 +77,34 @@ def gen_quant4(m, n, groupsize=-1, use_identity=False):
     layer.pack(linear, s.t())
     q = layer.B
     s = layer.s
+    print("layer.B", layer.B)
     return ref, q, s
 
 class Test(unittest.TestCase):
 
-    def run_problem(self, m, n, k, thread_k, thread_n, groupsize=-1):
-        print('% 5d % 6d % 6d % 4d % 4d % 4d' % (m, n, k, thread_k, thread_n, groupsize))
-        A = torch.randn((m, k), dtype=torch.half, device=DEV)
-        B_ref, B, s = gen_quant4(k, n, groupsize=groupsize, use_identity=True)
-        C = torch.zeros((m, n), dtype=torch.half, device=DEV)
-        C_ref = torch.matmul(A, B_ref)
-        workspace = torch.zeros(n // 128 * 16, device=DEV)
-        marlin_reproduction.mul(A, B, C, s, workspace, thread_k, thread_n, -1)
-        torch.cuda.synchronize()
-        print('C')
-        for row in C[:5]: 
-            print(' '.join(f'{x:.2f}' for x in row / 7))
-        print('C_ref')
-        for row in C_ref[:5]: 
-            print(row)
-        # print('C', C)
-        self.assertLess(torch.mean(torch.abs(C - C_ref)) / torch.mean(torch.abs(C_ref)), 0.001)
+    # def run_problem(self, m, n, k, thread_k, thread_n, groupsize=-1):
+    #     print('% 5d % 6d % 6d % 4d % 4d % 4d' % (m, n, k, thread_k, thread_n, groupsize))
+    #     A = torch.randn((m, k), dtype=torch.half, device=DEV)
+    #     B_ref, B, s = gen_quant4(k, n, groupsize=groupsize, matrix_type="index")
+    #     C = torch.zeros((m, n), dtype=torch.half, device=DEV)
+    #     C_ref = torch.matmul(A, B_ref)
+    #     workspace = torch.zeros(n // 128 * 16, device=DEV)
+    #     marlin_reproduction.mul(A, B, C, s, workspace, thread_k, thread_n, -1)
+    #     torch.cuda.synchronize()
+    #     print('C')
+    #     for row in C[:5]: 
+    #         print(' '.join(f'{x:.2f}' for x in row / 7))
+    #     print('C_ref')
+    #     for row in C_ref[:5]: 
+    #         print(row)
+    #     # print('C', C)
+    #     self.assertLess(torch.mean(torch.abs(C - C_ref)) / torch.mean(torch.abs(C_ref)), 0.001)
 
     def run_problem_idx(self, m, n, k, thread_k, thread_n, groupsize=-1): 
         print('% 5d % 6d % 6d % 4d % 4d % 4d' % (m, n, k, thread_k, thread_n, groupsize))
         A = torch.arange(m*k, dtype=torch.int32, device=DEV).reshape(m,k).to(torch.float32) / 100
         A = A.half()
+        
         # Check for inf values in A
         if torch.isinf(A).any():
             print("Warning: A contains inf values")
@@ -96,7 +113,8 @@ class Test(unittest.TestCase):
         #     for elem in row:
         #         print(f"{elem:.2f}", end=" ")
         #     print()
-        B_ref, B, s = gen_quant4(k, n, groupsize=groupsize, use_identity=True)
+        B_ref, B, s = gen_quant4(k, n, groupsize=groupsize, matrix_type="identity")
+        
         if torch.isinf(B).any():
             print("Warning: B contains inf values")
             print("Inf locations:", torch.nonzero(torch.isinf(B)))
@@ -105,6 +123,31 @@ class Test(unittest.TestCase):
         C = torch.zeros((m, n), dtype=torch.half, device=DEV)
         C_ref = torch.matmul(A, B_ref)
         workspace = torch.zeros(n // 128 * 16, device=DEV)
+        print(B.shape, B.dtype)
+        # Print stride between consecutive values in B
+        if B.shape[0] > 1:
+            stride = B[1].data_ptr() - B[0].data_ptr()
+            print(f"Stride between consecutive rows in B: {stride} bytes")
+        if B.shape[1] > 1:
+            stride = B[0][1].data_ptr() - B[0][0].data_ptr() 
+            print(f"Stride between consecutive columns in B: {stride} bytes")
+        
+        # print("B")
+        # first_four_rows = B[:4].cpu().numpy()  # Get first 4 rows
+        # print("First 4 rows as int32:")
+        # for row in first_four_rows:
+        #     print(row)
+        
+        # # Convert each int32 to 8 int4s for each row
+        # for row_idx, row in enumerate(first_four_rows):
+        #     print(f"\nRow {row_idx}:")
+        #     for col_idx, val in enumerate(row):
+        #         int4s = []
+        #         for i in range(8):
+        #             # Extract 4 bits using mask and shift
+        #             int4 = (val >> (4 * i)) & 0xF
+        #             int4s.append(int4)
+        #         print(f"{row_idx}, {col_idx}: int32 {val} -> int4s: {int4s}")
         marlin_reproduction.mul(A, B, C, s, workspace, thread_k, thread_n, -1)
         torch.cuda.synchronize()
 
@@ -123,7 +166,8 @@ class Test(unittest.TestCase):
             for thread_k, thread_n in [(64, 256)]:
                 if m > 16 and thread_k == 128:
                     continue
-                self.run_problem_idx(m, 256, 64, thread_k, thread_n)
+                self.run_problem_idx(m, 512, 1024, thread_k, thread_n)
+                # self.run_problem_idx(m, 32, 64, thread_k, thread_n)
 
     def test_k_stages_divisibility(self):
         print()
