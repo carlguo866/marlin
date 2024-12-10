@@ -424,7 +424,7 @@ __global__ void Marlin(
   };
 
   // Load the next sub-tile from the current location in the shared memory pipe into the current register buffer.
-  auto fetch_to_registers = [&] (int k, int pipe) {
+  auto fetch_to_registers = [&] (int k, int pipe, bool hadamard = false) {
     // It may seem inefficient that we reload the groups for every sub-tile; however, this does not seem to be a
     // significant bottleneck, while some theoretically better attempts have lead to bad instruction ordering by the
     // compiler and correspondingly a noticable drop in performance.
@@ -433,11 +433,12 @@ __global__ void Marlin(
       reinterpret_cast<int4*>(&frag_s[k % 2])[0] = sh_s_stage[s_sh_rd];
     }
     int4* sh_a_stage = sh_a + a_sh_stage * pipe;
-    if (thread_k_blocks == 16) {
+    if (thread_k_blocks == 16 && hadamard) {
       const int warps = threads / 32;
       const int warp_idx = threadIdx.x / 32;
       #pragma unroll
       for (size_t i = 0; i < thread_m_blocks * 16; i += warps) {
+      // int 
         const size_t tile_m = i + warp_idx;
         hadamard_transform_group_quantize<256, 32, false>(
             reinterpret_cast<uint8_t*>(sh_a_stage + tile_m * thread_k_blocks * 16 / 8),
@@ -640,7 +641,7 @@ __global__ void Marlin(
       fetch_to_shared(i, i, i < slice_iters);
     zero_accums();
     wait_for_stage();
-    fetch_to_registers(0, 0);
+    fetch_to_registers(0, 0, true);
     a_gl_rd += a_gl_rd_delta_o * (stages - 1);
   };
   start_pipes();
@@ -674,7 +675,7 @@ __global__ void Marlin(
     for (int pipe = 0; pipe < stages;) {
       #pragma unroll
       for (int k = 0; k < b_sh_wr_iters; k++) {
-        fetch_to_registers(k + 1, pipe % stages);
+        fetch_to_registers(k + 1, pipe % stages, k == b_sh_wr_iters - 1);
         if (k == b_sh_wr_iters - 2) {
           fetch_to_shared((pipe + stages - 1) % stages, pipe, slice_iters >= stages);
           pipe++;

@@ -167,7 +167,7 @@ class Test(unittest.TestCase):
         elif torch.any(C == 0):
             print("Warning: C contains some non-zero values")
             print("Number of non-zero values:", torch.sum(C != 0).item())
-        for idx, (c_row, c_ref_row) in enumerate(zip(C[:100], C_ref[:100])): 
+        for idx, (c_row, c_ref_row) in enumerate(zip(C, C_ref)): 
             # print index
             print(idx)
             print(' '.join(f'{i:>7d}' for i in range(len(c_row))))
